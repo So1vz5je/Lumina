@@ -49,3 +49,35 @@ export interface WindowsDatabaseQueryRequest {
   sql: string;
   rowLimit: number;
 }
+
+export type WindowsDatabaseMutationAction = 'insertRow' | 'updateRow' | 'deleteRow';
+
+export interface WindowsDatabaseRowIdentity {
+  columns: Array<{
+    name: string;
+    value: string | number | boolean | null;
+  }>;
+}
+
+export interface WindowsDatabaseEditableColumn extends WindowsDatabaseColumn {
+  required: boolean;
+  generated: boolean;
+  identity: boolean;
+}
+
+export interface WindowsDatabaseMutationRequest {
+  engine: WindowsDatabaseEngine;
+  action: WindowsDatabaseMutationAction;
+  instanceId: string;
+  database: string;
+  schema?: string;
+  table: string;
+  values?: Record<string, string | number | boolean | null>;
+  rowIdentity?: WindowsDatabaseRowIdentity;
+  generatedColumns?: string[];
+}
+
+export interface WindowsDatabaseMutationResponse {
+  affectedRows: number | null;
+  message: string;
+}
