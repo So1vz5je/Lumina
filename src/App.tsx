@@ -40,6 +40,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import ModeSelect from './pages/ModeSelect';
 import ModuleDetail from './pages/ModuleDetail';
 import Settings from './pages/Settings';
+import AiAnalysis from './pages/AiAnalysis';
 import RemoteWorkspace from './pages/RemoteWorkspace';
 import Scan from './pages/Scan';
 import Results from './pages/Results';
@@ -698,8 +699,9 @@ function App() {
   const isLinuxRemoteModuleContent =
     mode === 'remote' &&
     osType === 'Linux' &&
-    !['remote_workspace', 'file_manager', 'terminal', 'settings'].includes(currentModule);
-  const isFlushModuleContent = isWindowsLocalModuleContent || isLinuxRemoteModuleContent;
+    !['remote_workspace', 'file_manager', 'terminal', 'settings', 'ai_analysis'].includes(currentModule);
+  const isAiAnalysisContent = currentModule === 'ai_analysis';
+  const isFlushModuleContent = isWindowsLocalModuleContent || isLinuxRemoteModuleContent || isAiAnalysisContent;
   const renderModuleDetail = (moduleKey: string, compactHeader = false) => {
     if (mode === 'none') {
       return null;
@@ -769,7 +771,10 @@ function App() {
             <Menu
               mode="inline"
               selectedKeys={[currentModule]}
-              items={[{ key: 'settings', icon: <SettingOutlined />, label: '设置' }]}
+              items={[
+                { key: 'ai_analysis', icon: <CodeOutlined />, label: 'AI 分析' },
+                { key: 'settings', icon: <SettingOutlined />, label: '设置' },
+              ]}
               onClick={({ key }) => setCurrentModule(key)}
               className="analysis-menu"
               style={{ borderRight: 0 }}
@@ -810,6 +815,15 @@ function App() {
                 setGlassEnabled={(v: boolean) => { setGlassEnabled(v); localStorage.setItem('glassEnabled', String(v)); }}
                 wallpaperOpacity={wallpaperOpacity}
                 setWallpaperOpacity={(v: number) => { setWallpaperOpacity(v); localStorage.setItem('wallpaperOpacity', String(v)); }}
+              />
+            </div>
+          ) : currentModule === 'ai_analysis' ? (
+            <div key={currentModule} className="analysis-module-view analysis-module-enter" data-module-key={currentModule}>
+              <AiAnalysis
+                mode={mode}
+                osType={osType}
+                currentModule={currentModule}
+                scanResults={scanResults}
               />
             </div>
           ) : currentModule === 'remote_workspace' ? (

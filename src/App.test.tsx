@@ -108,6 +108,7 @@ describe('App authorization gate', () => {
     expect(screen.getByText('日志中心')).toBeInTheDocument();
     expect(screen.getByText('文件痕迹')).toBeInTheDocument();
     expect(screen.getByText('应用服务')).toBeInTheDocument();
+    expect(screen.getByText('AI 分析')).toBeInTheDocument();
     expect(screen.queryByText('Security 日志')).not.toBeInTheDocument();
     expect(screen.queryByText('Docker 容器')).not.toBeInTheDocument();
     expect(screen.queryByText('深度分析')).not.toBeInTheDocument();
@@ -451,6 +452,24 @@ describe('App authorization gate', () => {
       expect(view).toBeInTheDocument();
       expect(view).toHaveClass('analysis-module-enter');
     });
+  });
+
+  it('opens the AI analysis workspace from the sidebar', async () => {
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: 'Win32',
+    });
+    invokeMock.mockResolvedValue({});
+
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByText('本地分析'));
+    fireEvent.click(await screen.findByText('AI 分析'));
+
+    await waitFor(() => {
+      const view = container.querySelector('.analysis-module-view[data-module-key="ai_analysis"]');
+      expect(view).toBeInTheDocument();
+    });
+    expect(screen.getByText('AI 分析工作台')).toBeInTheDocument();
   });
 
   it('keeps the workbench back button clickable outside the titlebar drag layer', async () => {

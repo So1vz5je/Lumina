@@ -1,13 +1,14 @@
-import { Button, Typography, message } from 'antd';
+import { useEffect, useState } from 'react';
+import { Button, Input, InputNumber, Select, Space, Switch, Typography, message } from 'antd';
 import type { ReactNode } from 'react';
 import {
   CheckCircleOutlined,
-  DownloadOutlined,
   FolderOpenOutlined,
+  RobotOutlined,
   MoonOutlined,
-  SafetyOutlined,
   SunOutlined,
 } from '@ant-design/icons';
+import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 
 const { Text, Title } = Typography;
@@ -38,6 +39,30 @@ const themeOptions: ThemeOption[] = [
   { key: 'dark', label: '暗色', dark: true, icon: <MoonOutlined /> },
 ];
 
+interface AiConfigView {
+  provider: string;
+  baseUrl: string;
+  apiKeyPreview: string;
+  hasApiKey: boolean;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  showReasoning: boolean;
+  toolsEnabled: boolean;
+}
+
+const defaultAiConfig: AiConfigView = {
+  provider: 'openai-compatible',
+  baseUrl: 'https://api.openai.com/v1',
+  apiKeyPreview: '',
+  hasApiKey: false,
+  model: 'gpt-4.1-mini',
+  temperature: 0.2,
+  maxTokens: 2048,
+  showReasoning: true,
+  toolsEnabled: true,
+};
+
 export default function Settings({
   isDarkMode,
   setIsDarkMode,
@@ -47,6 +72,28 @@ export default function Settings({
   setWallpaper,
 }: SettingsProps) {
   const activeTheme = wallpaper === 'dark' || isDarkMode ? 'dark' : 'light';
+  const [aiConfig, setAiConfig] = useState<AiConfigView>(defaultAiConfig);
+  const [aiApiKey, setAiApiKey] = useState('');
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AiConfigView>('ai_get_config')
+      .then((config) => {
+        if (!cancelled && config && typeof config === 'object') {
+          setAiConfig({ ...defaultAiConfig, ...config });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAiConfig(defaultAiConfig);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const applyTheme = (option: ThemeOption) => {
     setWallpaper(option.key);
@@ -69,6 +116,47 @@ export default function Settings({
       }
     } catch {
       message.error('无法打开目录选择器');
+    }
+  };
+
+  const handleSaveAiConfig = async () => {
+    setAiSaving(true);
+    try {
+      const saved = await invoke<AiConfigView>('ai_save_config', {
+        request: {
+          provider: aiConfig.provider,
+          baseUrl: aiConfig.baseUrl,
+          apiKey: aiApiKey,
+          model: aiConfig.model,
+          temperature: aiConfig.temperature,
+          maxTokens: aiConfig.maxTokens,
+          showReasoning: aiConfig.showReasoning,
+          toolsEnabled: aiConfig.toolsEnabled,
+        },
+      });
+      setAiConfig({ ...defaultAiConfig, ...saved });
+      setAiApiKey('');
+      message.success('AI 配置已保存');
+    } catch (error) {
+      message.error(`保存 AI 配置失败: ${error}`);
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
+  const handleTestAiConfig = async () => {
+    setAiTesting(true);
+    try {
+      const result = await invoke<{ success: boolean; message: string }>('ai_test_config');
+      if (result.success) {
+        message.success(result.message);
+      } else {
+        message.warning(result.message);
+      }
+    } catch (error) {
+      message.error(`AI 配置检测失败: ${error}`);
+    } finally {
+      setAiTesting(false);
     }
   };
 
@@ -118,6 +206,105 @@ export default function Settings({
             <strong>{defaultDownloadPath || '未设置'}</strong>
             <Button icon={<FolderOpenOutlined />} onClick={handleChangeDownloadPath} type="primary">
               更改路径
+            </Button>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-head">
+            <div>
+              <Text className="settings-section-kicker">AI</Text>
+              <Title level={5}>AI 配置</Title>
+            </div>
+            <RobotOutlined className="settings-section-icon" />
+          </div>
+          <div className="settings-ai-grid">
+            <label className="settings-field">
+              <span>Provider</span>
+              <Select
+                aria-label="Provider"
+                value={aiConfig.provider}
+                onChange={(provider) => setAiConfig((current) => ({ ...current, provider }))}
+                options={[
+                  { value: 'openai-compatible', label: 'OpenAI Compatible' },
+                  { value: 'openai', label: 'OpenAI' },
+                  { value: 'anthropic', label: 'Anthropic' },
+                  { value: 'deepseek', label: 'DeepSeek / Qwen' },
+                ]}
+              />
+            </label>
+            <label className="settings-field wide">
+              <span>Base URL</span>
+              <Input
+                aria-label="Base URL"
+                value={aiConfig.baseUrl}
+                onChange={(event) => setAiConfig((current) => ({ ...current, baseUrl: event.target.value }))}
+                placeholder="https://api.openai.com/v1"
+              />
+            </label>
+            <label className="settings-field">
+              <span>API Key</span>
+              <Input.Password
+                aria-label="API Key"
+                value={aiApiKey}
+                onChange={(event) => setAiApiKey(event.target.value)}
+                placeholder={aiConfig.hasApiKey ? `已保存 ${aiConfig.apiKeyPreview}` : 'sk-...'}
+              />
+            </label>
+            <label className="settings-field">
+              <span>Model</span>
+              <Input
+                aria-label="Model"
+                value={aiConfig.model}
+                onChange={(event) => setAiConfig((current) => ({ ...current, model: event.target.value }))}
+                placeholder="gpt-4.1-mini"
+              />
+            </label>
+            <label className="settings-field">
+              <span>Temperature</span>
+              <InputNumber
+                aria-label="Temperature"
+                min={0}
+                max={2}
+                step={0.1}
+                value={aiConfig.temperature}
+                onChange={(value) => setAiConfig((current) => ({ ...current, temperature: Number(value ?? 0.2) }))}
+              />
+            </label>
+            <label className="settings-field">
+              <span>Max Tokens</span>
+              <InputNumber
+                aria-label="Max Tokens"
+                min={256}
+                max={32768}
+                step={256}
+                value={aiConfig.maxTokens}
+                onChange={(value) => setAiConfig((current) => ({ ...current, maxTokens: Number(value ?? 2048) }))}
+              />
+            </label>
+            <div className="settings-ai-switches">
+              <Space>
+                <Switch
+                  checked={aiConfig.showReasoning}
+                  onChange={(showReasoning) => setAiConfig((current) => ({ ...current, showReasoning }))}
+                />
+                <Text>显示思考过程</Text>
+              </Space>
+              <Space>
+                <Switch
+                  checked={aiConfig.toolsEnabled}
+                  onChange={(toolsEnabled) => setAiConfig((current) => ({ ...current, toolsEnabled }))}
+                />
+                <Text>启用工具调用</Text>
+              </Space>
+            </div>
+          </div>
+          <div className="settings-ai-actions">
+            <Button onClick={handleTestAiConfig} loading={aiTesting}>
+              测试连接
+            </Button>
+            <Button type="primary" onClick={handleSaveAiConfig} loading={aiSaving}>
+              保存 AI 配置
             </Button>
           </div>
         </section>

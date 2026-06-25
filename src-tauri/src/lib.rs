@@ -1,4 +1,5 @@
 mod analyzer;
+mod ai;
 mod license;
 mod remote;
 mod ssh;
@@ -762,6 +763,10 @@ pub fn run() {
             execute_local_command,
             windows_database::windows_database_readonly,
             windows_database::windows_database_mutation,
+            ai::ai_get_config,
+            ai::ai_save_config,
+            ai::ai_test_config,
+            ai::ai_send_message,
             get_machine_info,
             verify_license,
             activate_license,
