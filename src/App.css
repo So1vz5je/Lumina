@@ -2608,8 +2608,16 @@ body {
 
 .windows-database-workbench .windows-database-nav-button:focus,
 .windows-database-workbench .windows-database-nav-button:focus-visible {
+  border: none !important;
   outline: none !important;
   box-shadow: none !important;
+}
+
+.windows-database-workbench .windows-database-nav-button {
+  border: none !important;
+  box-shadow: none !important;
+  appearance: none;
+  forced-color-adjust: none;
 }
 
 /* ===== Windows Local Analysis Surface ===== */

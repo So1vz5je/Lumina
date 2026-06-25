@@ -1046,7 +1046,7 @@ const styles: Record<string, CSSProperties> = {
   },
   navButton: {
     width: '100%',
-    border: '1px solid transparent',
+    border: 'none',
     borderRadius: 6,
     background: 'transparent',
     padding: '8px 10px',
@@ -1061,7 +1061,6 @@ const styles: Record<string, CSSProperties> = {
   },
   navButtonActive: {
     background: '#e6f4ff',
-    borderColor: 'transparent',
   },
   tableName: {
     overflow: 'hidden',

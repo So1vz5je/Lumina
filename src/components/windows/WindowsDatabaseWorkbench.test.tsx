@@ -231,12 +231,14 @@ describe('windows database detail contract', () => {
     const databaseItem = await screen.findByRole('button', { name: 'appdb' });
     expect(databaseItem.tagName).toBe('DIV');
     expect(databaseItem).toHaveClass('windows-database-nav-button');
+    expect(databaseItem).toHaveStyle('border: none');
 
     fireEvent.click(databaseItem);
 
     const tableItem = await screen.findByRole('button', { name: /users/ });
     expect(tableItem.tagName).toBe('DIV');
     expect(tableItem).toHaveClass('windows-database-nav-button');
+    expect(tableItem).toHaveStyle('border: none');
   });
 
   it('blocks non-readonly queries in the UI before sending them', async () => {
