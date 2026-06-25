@@ -194,6 +194,56 @@ describe('windows database detail contract', () => {
     });
   });
 
+  it('filters sqlcmd separator rows from database, table, and column navigation', async () => {
+    const instance: WindowsDatabaseInstance = {
+      id: 'sqlserver:MSSQLSERVER',
+      engine: 'sqlserver',
+      displayName: 'SQL Server',
+      source: 'service',
+      status: 'running',
+      path: 'C:\\Program Files\\Microsoft SQL Server\\MSSQL16.MSSQLSERVER\\MSSQL\\Binn\\sqlservr.exe',
+      version: '16.0',
+      host: '127.0.0.1',
+      port: 1433,
+      credentialMode: 'detected',
+      credentialLabel: 'Detected from analyzer',
+    };
+    const onRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ databases: ['1212512', '----------', 'policeinfo'] })
+      .mockResolvedValueOnce({
+        tables: [
+          { schema: '----------', name: '----------' },
+          { schema: 'dbo', name: 'cases' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        columns: [
+          { name: '----------', dataType: '----------', nullable: false },
+          { name: 'Pno', dataType: 'int', nullable: false },
+        ],
+      })
+      .mockResolvedValueOnce({
+        columns: ['Pno'],
+        rows: [{ Pno: '100001' }],
+        rowCount: 1,
+        truncated: false,
+      });
+
+    render(<WindowsDatabaseWorkbench instance={instance} onRequest={onRequest} />);
+
+    expect(await screen.findByText('policeinfo')).toBeInTheDocument();
+    expect(screen.queryByText('----------')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('policeinfo'));
+    expect(await screen.findByText('cases')).toBeInTheDocument();
+    expect(screen.queryByText('----------')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('cases'));
+    expect(await screen.findByText('Pno')).toBeInTheDocument();
+    expect(screen.queryByText('----------')).not.toBeInTheDocument();
+  });
+
   it('keeps long database table lists inside fixed scroll regions', async () => {
     const manyTables = Array.from({ length: 60 }, (_, index) => ({
       schema: 'dbo',
@@ -311,7 +361,7 @@ describe('windows database detail contract', () => {
     );
   });
 
-  it('keeps controlled CRUD disabled until edit mode is enabled', async () => {
+  it('shows preview row actions without requiring edit mode', async () => {
     const onRequest = vi
       .fn()
       .mockResolvedValueOnce({ databases: ['appdb'] })
@@ -340,9 +390,11 @@ describe('windows database detail contract', () => {
     fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
     expect(await screen.findByText('old@example.com')).toBeInTheDocument();
 
-    expect(screen.queryByRole('button', { name: /新增行/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('switch', { name: /编辑模式/ }));
+    expect(screen.queryByRole('switch', { name: /编辑模式/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /新增行/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /复制/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /编辑/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /删除/ })).toBeInTheDocument();
   });
 
   it('submits a controlled row update and refreshes preview', async () => {
@@ -385,7 +437,6 @@ describe('windows database detail contract', () => {
     expect(await screen.findByText('id')).toBeInTheDocument();
     fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
     expect(await screen.findByText('old@example.com')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('switch', { name: /编辑模式/ }));
     fireEvent.click(await screen.findByRole('button', { name: /编辑/ }));
     fireEvent.change(screen.getByLabelText('email'), { target: { value: 'new@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: /保存/ }));
@@ -424,7 +475,6 @@ describe('windows database detail contract', () => {
     expect(await screen.findByText('message')).toBeInTheDocument();
     fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
     expect(await screen.findByText('hello')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('switch', { name: /编辑模式/ }));
 
     expect(await screen.findByRole('button', { name: /编辑/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /删除/ })).toBeDisabled();

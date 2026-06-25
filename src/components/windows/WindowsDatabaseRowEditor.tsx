@@ -64,7 +64,7 @@ export function WindowsDatabaseRowEditor({
           保存
         </Button>,
       ]}
-      width={640}
+      width={520}
       destroyOnHidden
     >
       <Space orientation="vertical" size={12} style={{ width: '100%' }}>

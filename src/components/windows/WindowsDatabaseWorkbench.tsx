@@ -1,4 +1,4 @@
-import { Alert, Button, Empty, Input, InputNumber, Popconfirm, Space, Spin, Switch, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Empty, Input, InputNumber, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
@@ -84,22 +84,36 @@ interface QueryResultTable {
   truncated: boolean;
 }
 
+function isSqlcmdSeparatorValue(value: unknown): boolean {
+  const text = String(value ?? '').trim();
+  return text.length >= 3 && /^[\s_-]+$/.test(text);
+}
+
+function isSqlcmdSeparatorRecord(record: Record<string, unknown>): boolean {
+  const values = Object.values(record).filter((value) => String(value ?? '').trim());
+  return values.length > 0 && values.every(isSqlcmdSeparatorValue);
+}
+
 function normalizeTables(input: unknown): WindowsDatabaseTableRef[] {
   if (!Array.isArray(input)) {
     return [];
   }
 
   return input.flatMap((item) => {
-    if (typeof item === 'string' && item.trim()) {
+    if (typeof item === 'string' && item.trim() && !isSqlcmdSeparatorValue(item)) {
       return [{ name: item.trim() }];
     }
 
     if (item && typeof item === 'object' && typeof (item as WindowsDatabaseTableRef).name === 'string') {
       const table = item as WindowsDatabaseTableRef;
+      if (isSqlcmdSeparatorValue(table.name)) {
+        return [];
+      }
+
       return [
         {
           catalog: table.catalog,
-          schema: table.schema,
+          schema: isSqlcmdSeparatorValue(table.schema) ? undefined : table.schema,
           name: table.name,
         },
       ];
@@ -120,14 +134,18 @@ function normalizeColumns(input: unknown): WindowsDatabaseColumn[] {
     }
 
     const column = item as WindowsDatabaseColumn;
+    if (isSqlcmdSeparatorValue(column.name)) {
+      return [];
+    }
+
     return [
       {
         name: column.name,
-        dataType: column.dataType ?? '',
+        dataType: isSqlcmdSeparatorValue(column.dataType) ? '' : column.dataType ?? '',
         nullable: Boolean(column.nullable),
-        key: column.key,
-        defaultValue: column.defaultValue,
-        extra: column.extra,
+        key: isSqlcmdSeparatorValue(column.key) ? undefined : column.key,
+        defaultValue: isSqlcmdSeparatorValue(column.defaultValue) ? undefined : column.defaultValue,
+        extra: isSqlcmdSeparatorValue(column.extra) ? undefined : column.extra,
       },
     ];
   });
@@ -147,11 +165,15 @@ function normalizeResult(input: unknown): QueryResultTable | null {
 
   const rows = Array.isArray(candidate.rows)
     ? candidate.rows.filter(
-        (row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object' && !Array.isArray(row),
+        (row): row is Record<string, unknown> =>
+          Boolean(row) &&
+          typeof row === 'object' &&
+          !Array.isArray(row) &&
+          !isSqlcmdSeparatorRecord(row as Record<string, unknown>),
       )
     : [];
   const columnsFromPayload = Array.isArray(candidate.columns)
-    ? candidate.columns.filter((value): value is string => typeof value === 'string')
+    ? candidate.columns.filter((value): value is string => typeof value === 'string' && !isSqlcmdSeparatorValue(value))
     : [];
   const columns =
     columnsFromPayload.length > 0
@@ -284,10 +306,10 @@ export function WindowsDatabaseWorkbench({
   const [activeTab, setActiveTab] = useState('structure');
   const [sql, setSql] = useState(() => buildSampleSql(instance.engine, null, null, DEFAULT_READONLY_ROW_LIMIT));
   const [rowLimit, setRowLimit] = useState(DEFAULT_READONLY_ROW_LIMIT);
-  const [editMode, setEditMode] = useState(false);
   const [rowEditorOpen, setRowEditorOpen] = useState(false);
   const [rowEditorMode, setRowEditorMode] = useState<'insert' | 'update'>('insert');
   const [editingRow, setEditingRow] = useState<Record<string, unknown> | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; row: Record<string, unknown> } | null>(null);
   const [databaseLoading, setDatabaseLoading] = useState(false);
   const [tableLoading, setTableLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -313,9 +335,9 @@ export function WindowsDatabaseWorkbench({
       setQueryResult(null);
       setSelectedDatabase(null);
       setSelectedTable(null);
-      setEditMode(false);
       setRowEditorOpen(false);
       setEditingRow(null);
+      setContextMenu(null);
       setMutationError(null);
       setMutationSuccess(null);
       setSql(buildSampleSql(instance.engine, null, null, DEFAULT_READONLY_ROW_LIMIT));
@@ -332,7 +354,9 @@ export function WindowsDatabaseWorkbench({
         }
 
         const nextDatabases = Array.isArray(response?.databases)
-          ? response.databases.filter((value): value is string => typeof value === 'string')
+          ? response.databases.filter(
+              (value): value is string => typeof value === 'string' && !isSqlcmdSeparatorValue(value),
+            )
           : [];
         setDatabases(nextDatabases);
       } catch (error) {
@@ -352,6 +376,21 @@ export function WindowsDatabaseWorkbench({
       cancelled = true;
     };
   }, [instance.engine, instance.id, onRequest]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const closeContextMenu = () => setContextMenu(null);
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('keydown', closeContextMenu);
+
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('keydown', closeContextMenu);
+    };
+  }, [contextMenu]);
 
   const previewColumns = useMemo(
     () =>
@@ -411,6 +450,7 @@ export function WindowsDatabaseWorkbench({
     setEditingRow(null);
     setMutationError(null);
     setMutationSuccess(null);
+    setContextMenu(null);
     setRowEditorOpen(true);
   };
 
@@ -419,6 +459,7 @@ export function WindowsDatabaseWorkbench({
     setEditingRow(row);
     setMutationError(null);
     setMutationSuccess(null);
+    setContextMenu(null);
     setRowEditorOpen(true);
   };
 
@@ -428,9 +469,9 @@ export function WindowsDatabaseWorkbench({
     setTables([]);
     setColumns([]);
     setPreviewResult(null);
-    setEditMode(false);
     setRowEditorOpen(false);
     setEditingRow(null);
+    setContextMenu(null);
     setMutationError(null);
     setMutationSuccess(null);
     setTableError(null);
@@ -490,6 +531,7 @@ export function WindowsDatabaseWorkbench({
     setPreviewResult(null);
     setRowEditorOpen(false);
     setEditingRow(null);
+    setContextMenu(null);
     setMutationError(null);
     setMutationSuccess(null);
     setDetailError(null);
@@ -587,6 +629,17 @@ export function WindowsDatabaseWorkbench({
     }
   };
 
+  const copyRow = (row: Record<string, unknown>) => {
+    const copyPayload = Object.fromEntries(
+      Object.entries(row).filter(([key]) => key !== '__workbenchRowKey'),
+    );
+    const text = JSON.stringify(copyPayload, null, 2);
+    void navigator.clipboard?.writeText(text);
+    setMutationSuccess('已复制当前行');
+    setMutationError(null);
+    setContextMenu(null);
+  };
+
   const handleRunQuery = async () => {
     const trimmedSql = sql.trim();
     const validationError = validateReadonlySql(instance.engine, trimmedSql);
@@ -624,41 +677,42 @@ export function WindowsDatabaseWorkbench({
     }
   };
 
-  const previewActionColumns = editMode
-    ? [
-        {
-          title: '操作',
-          key: '__actions',
-          fixed: 'right' as const,
-          width: 150,
-          render: (_: unknown, row: Record<string, unknown>) => {
-            const identity = buildWindowsDatabaseRowIdentity(columns, row);
+  const previewActionColumns = [
+    {
+      title: '操作',
+      key: '__actions',
+      fixed: 'right' as const,
+      width: 210,
+      render: (_: unknown, row: Record<string, unknown>) => {
+        const identity = buildWindowsDatabaseRowIdentity(columns, row);
 
-            return (
-              <Space size={6}>
-                <Button
-                  size="small"
-                  aria-label="编辑"
-                  disabled={!identity || mutationLoading}
-                  onClick={() => openUpdateEditor(row)}
-                >
-                  编辑
-                </Button>
-                <Popconfirm
-                  title="确认删除这一行？"
-                  disabled={!identity || mutationLoading}
-                  onConfirm={() => void deleteRow(row)}
-                >
-                  <Button size="small" danger aria-label="删除" disabled={!identity || mutationLoading}>
-                    删除
-                  </Button>
-                </Popconfirm>
-              </Space>
-            );
-          },
-        },
-      ]
-    : [];
+        return (
+          <Space size={6}>
+            <Button size="small" aria-label="复制" onClick={() => copyRow(row)}>
+              复制
+            </Button>
+            <Button
+              size="small"
+              aria-label="编辑"
+              disabled={!onMutation || !identity || mutationLoading}
+              onClick={() => openUpdateEditor(row)}
+            >
+              编辑
+            </Button>
+            <Popconfirm
+              title="确认删除这一行？"
+              disabled={!onMutation || !identity || mutationLoading}
+              onConfirm={() => void deleteRow(row)}
+            >
+              <Button size="small" danger aria-label="删除" disabled={!onMutation || !identity || mutationLoading}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        );
+      },
+    },
+  ];
   const previewTableColumns = [...previewColumns, ...previewActionColumns];
 
   return (
@@ -842,27 +896,16 @@ export function WindowsDatabaseWorkbench({
                       </Text>
                     </div>
                     <div style={styles.queryToolbar}>
-                      <Space size={8}>
-                        <Text type="secondary">编辑模式</Text>
-                        <Switch
-                          size="small"
-                          checked={editMode}
-                          onChange={setEditMode}
-                          aria-label="编辑模式"
-                          disabled={!onMutation}
-                        />
-                      </Space>
-                      {editMode ? (
-                        <Button
-                          size="small"
-                          type="primary"
-                          aria-label="新增行"
-                          onClick={openInsertEditor}
-                          disabled={!selectedTable || !onMutation || mutationLoading}
-                        >
-                          新增行
-                        </Button>
-                      ) : null}
+                      <span />
+                      <Button
+                        size="small"
+                        type="primary"
+                        aria-label="新增行"
+                        onClick={openInsertEditor}
+                        disabled={!selectedTable || !onMutation || mutationLoading}
+                      >
+                        新增行
+                      </Button>
                     </div>
                     <div style={styles.tablePanel}>
                       <Spin spinning={detailLoading}>
@@ -876,6 +919,12 @@ export function WindowsDatabaseWorkbench({
                             scroll={{ y: TABLE_SCROLL_HEIGHT, x: 'max-content' }}
                             dataSource={previewRows}
                             columns={previewTableColumns}
+                            onRow={(row) => ({
+                              onContextMenu: (event) => {
+                                event.preventDefault();
+                                setContextMenu({ x: event.clientX, y: event.clientY, row });
+                              },
+                            })}
                           />
                         )}
                       </Spin>
@@ -962,6 +1011,49 @@ export function WindowsDatabaseWorkbench({
         onCancel={() => setRowEditorOpen(false)}
         onSubmit={(values) => void submitRowMutation(values)}
       />
+      {contextMenu ? (
+        <div style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}>
+          <Button type="text" size="small" block onClick={() => copyRow(contextMenu.row)}>
+            复制
+          </Button>
+          <Button
+            type="text"
+            size="small"
+            block
+            disabled={!selectedTable || !onMutation || mutationLoading}
+            onClick={openInsertEditor}
+          >
+            新增
+          </Button>
+          <Button
+            type="text"
+            size="small"
+            block
+            disabled={!onMutation || !buildWindowsDatabaseRowIdentity(columns, contextMenu.row) || mutationLoading}
+            onClick={() => {
+              openUpdateEditor(contextMenu.row);
+              setContextMenu(null);
+            }}
+          >
+            编辑
+          </Button>
+          <Popconfirm
+            title="确认删除这一行？"
+            disabled={!onMutation || !buildWindowsDatabaseRowIdentity(columns, contextMenu.row) || mutationLoading}
+            onConfirm={() => void deleteRow(contextMenu.row)}
+          >
+            <Button
+              type="text"
+              size="small"
+              danger
+              block
+              disabled={!onMutation || !buildWindowsDatabaseRowIdentity(columns, contextMenu.row) || mutationLoading}
+            >
+              删除
+            </Button>
+          </Popconfirm>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -970,6 +1062,7 @@ const styles: Record<string, CSSProperties> = {
   root: {
     display: 'flex',
     flexDirection: 'column',
+    position: 'relative',
     border: '1px solid #d9d9d9',
     borderRadius: 8,
     background: '#fff',
@@ -1139,6 +1232,16 @@ const styles: Record<string, CSSProperties> = {
     clip: 'rect(0, 0, 0, 0)',
     whiteSpace: 'nowrap',
     border: 0,
+  },
+  contextMenu: {
+    position: 'fixed',
+    zIndex: 1100,
+    minWidth: 120,
+    padding: 6,
+    background: '#fff',
+    border: '1px solid #d9d9d9',
+    borderRadius: 6,
+    boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
   },
 };
 
