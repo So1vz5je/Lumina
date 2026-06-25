@@ -2501,6 +2501,11 @@ body {
   background: transparent;
 }
 
+.analysis-workbench .analysis-content.windows-local-content > .analysis-module-view {
+  height: 100%;
+  min-height: 0;
+}
+
 .analysis-workbench .analysis-content.linux-remote-content > div {
   background: transparent;
 }
@@ -2508,6 +2513,54 @@ body {
 .analysis-workbench .analysis-module-view {
   min-height: 100%;
   transform-origin: 50% 16px;
+}
+
+.analysis-workbench .windows-module-workspace-page {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.analysis-workbench.dark .windows-module-workspace-page {
+  background: #111923;
+}
+
+.analysis-workbench .windows-module-workspace-tabs {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.analysis-workbench .windows-module-workspace-tabs > .ant-tabs-nav {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 8px 16px 0;
+  background: #ffffff;
+  border-bottom: 1px solid #e5edf5;
+}
+
+.analysis-workbench.dark .windows-module-workspace-tabs > .ant-tabs-nav {
+  background: #111923;
+  border-bottom-color: #263241;
+}
+
+.analysis-workbench .windows-module-workspace-tabs .ant-tabs-tab {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.analysis-workbench .windows-module-workspace-tabs .ant-tabs-content-holder {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.analysis-workbench .windows-module-workspace-tabs .ant-tabs-content,
+.analysis-workbench .windows-module-workspace-tabs .ant-tabs-tabpane {
+  height: 100%;
+  min-height: 0;
 }
 
 .analysis-workbench .analysis-module-enter {
@@ -2899,6 +2952,12 @@ body {
   box-shadow: none !important;
 }
 
+.analysis-workbench .windows-module-header.windows-module-header-compact {
+  min-height: 44px;
+  padding: 6px 16px 4px !important;
+  border-bottom: 0 !important;
+}
+
 .analysis-workbench.dark .windows-module-header {
   background: #111923 !important;
   border-bottom-color: transparent !important;
@@ -2907,6 +2966,11 @@ body {
 .analysis-workbench .windows-module-titlebar {
   min-height: 38px;
   gap: 10px !important;
+}
+
+.analysis-workbench .windows-module-header-compact .windows-module-titlebar {
+  min-height: 34px;
+  justify-content: flex-end;
 }
 
 .analysis-workbench .windows-module-title {
@@ -3091,6 +3155,12 @@ body {
   box-shadow: none !important;
 }
 
+.analysis-workbench .windows-module-workspace-page .windows-data-workbench {
+  border-top: 0 !important;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+}
+
 .analysis-workbench.dark .windows-data-workbench {
   border-color: #273548 !important;
   background: #111923 !important;
@@ -3119,6 +3189,13 @@ body {
   min-width: 0;
   align-items: center;
   gap: 12px;
+}
+
+.analysis-workbench .windows-data-toolbar-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
 }
 
 .analysis-workbench .windows-search-input {

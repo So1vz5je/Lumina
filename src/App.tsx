@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Layout, Menu, ConfigProvider, theme, message, Button } from 'antd';
+import { useState, useEffect, useMemo, type ReactNode } from 'react';
+import { Layout, Menu, ConfigProvider, theme, message, Button, Tabs } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   DesktopOutlined,
@@ -56,6 +56,154 @@ type OsType = 'Windows' | 'Linux' | 'macOS' | 'Unknown';
 type PrivilegeMode = 'none' | 'sudo' | 'su';
 
 type MenuItem = Required<MenuProps>['items'][number];
+
+interface WindowsWorkspaceModule {
+  key: string;
+  label: string;
+}
+
+interface WindowsModuleWorkspace {
+  key: string;
+  icon: ReactNode;
+  label: string;
+  modules: WindowsWorkspaceModule[];
+}
+
+const WINDOWS_MODULE_WORKSPACES: WindowsModuleWorkspace[] = [
+  {
+    key: 'windows_overview_workspace',
+    icon: <DesktopOutlined />,
+    label: '主机总览',
+    modules: [
+      { key: 'system_info', label: '主机概况' },
+      { key: 'env_vars', label: '环境变量' },
+    ],
+  },
+  {
+    key: 'windows_identity_workspace',
+    icon: <TeamOutlined />,
+    label: '账户与进程',
+    modules: [
+      { key: 'user_list', label: '本地账户' },
+      { key: 'logged_users', label: '登录会话' },
+      { key: 'process_list', label: '运行进程' },
+      { key: 'service_list', label: '系统服务' },
+      { key: 'process_anomaly', label: '进程异常' },
+    ],
+  },
+  {
+    key: 'windows_persistence_workspace',
+    icon: <ThunderboltOutlined />,
+    label: '持久化入口',
+    modules: [
+      { key: 'startup', label: '自启动项' },
+      { key: 'cron', label: '计划任务' },
+      { key: 'registry', label: '注册表关键项' },
+      { key: 'persistence', label: '持久化检测' },
+      { key: 'registry_persistence_deep', label: '注册表深度持久化' },
+      { key: 'wmi_persistence', label: 'WMI 持久化' },
+      { key: 'bits_jobs', label: 'BITS 任务' },
+      { key: 'rdp', label: 'RDP 入口' },
+    ],
+  },
+  {
+    key: 'windows_network_workspace',
+    icon: <GlobalOutlined />,
+    label: '网络暴露',
+    modules: [
+      { key: 'network_conn', label: '活动连接' },
+      { key: 'listen_ports', label: '监听端口' },
+      { key: 'win_firewall', label: 'Windows 防火墙' },
+      { key: 'dns_config', label: 'DNS 配置' },
+      { key: 'hosts_file', label: 'Hosts 文件' },
+    ],
+  },
+  {
+    key: 'windows_logs_workspace',
+    icon: <FileTextOutlined />,
+    label: '日志中心',
+    modules: [
+      { key: 'security_events', label: '高价值安全事件' },
+      { key: 'win_security_log', label: 'Security 日志' },
+      { key: 'win_system_log', label: 'System 日志' },
+      { key: 'win_app_log', label: 'Application 日志' },
+      { key: 'win_powershell_log', label: 'PowerShell 日志' },
+      { key: 'rdp_logon_trace', label: 'RDP 登录链路' },
+      { key: 'win_defender', label: 'Defender 状态' },
+      { key: 'defender_history', label: 'Defender 检测历史' },
+      { key: 'powershell_deep', label: 'PowerShell 深度' },
+    ],
+  },
+  {
+    key: 'windows_files_workspace',
+    icon: <FileSearchOutlined />,
+    label: '文件痕迹',
+    modules: [
+      { key: 'file_scan', label: '文件扫描' },
+      { key: 'suspicious_files', label: '可疑文件' },
+      { key: 'execution_trace', label: '执行痕迹' },
+      { key: 'recent_files', label: '最近访问' },
+      { key: 'browser', label: '浏览器痕迹' },
+    ],
+  },
+  {
+    key: 'windows_apps_workspace',
+    icon: <CloudServerOutlined />,
+    label: '应用服务',
+    modules: [
+      { key: 'docker', label: 'Docker 容器' },
+      { key: 'docker_images', label: 'Docker 镜像' },
+      { key: 'database', label: '数据库检测' },
+      { key: 'panel', label: '面板检测' },
+      { key: 'software', label: '软件安装分析' },
+    ],
+  },
+];
+
+function getWindowsWorkspace(moduleKey: string): WindowsModuleWorkspace | undefined {
+  return WINDOWS_MODULE_WORKSPACES.find((workspace) =>
+    workspace.key === moduleKey || workspace.modules.some((module) => module.key === moduleKey),
+  );
+}
+
+function getWindowsSelectedMenuKey(moduleKey: string): string {
+  return getWindowsWorkspace(moduleKey)?.key ?? moduleKey;
+}
+
+function WindowsModuleWorkspaceView({
+  workspace,
+  initialModuleKey,
+  renderModule,
+}: {
+  workspace: WindowsModuleWorkspace;
+  initialModuleKey: string;
+  renderModule: (moduleKey: string) => ReactNode;
+}) {
+  const initialActiveKey = workspace.modules.some((module) => module.key === initialModuleKey)
+    ? initialModuleKey
+    : workspace.modules[0]?.key ?? '';
+  const [activeModuleKey, setActiveModuleKey] = useState(initialActiveKey);
+
+  useEffect(() => {
+    setActiveModuleKey(initialActiveKey);
+  }, [initialActiveKey, workspace.key]);
+
+  return (
+    <div className="windows-module-workspace-page">
+      <Tabs
+        className="windows-module-workspace-tabs"
+        activeKey={activeModuleKey}
+        onChange={setActiveModuleKey}
+        size="small"
+        items={workspace.modules.map((module) => ({
+          key: module.key,
+          label: module.label,
+          children: module.key === activeModuleKey ? renderModule(module.key) : null,
+        }))}
+      />
+    </div>
+  );
+}
 
 // 窗口控制按钮组件
 const WindowControls = () => {
@@ -208,11 +356,18 @@ const buildRemoteWorkspaceMenuItems = (isLinux: boolean): MenuItem[] => {
 };
 
 const buildWindowsMenuItems = (mode: AnalysisMode): MenuItem[] => {
-  const menuGroups: MenuItem[] = [];
-
   if (mode === 'local') {
-    menuGroups.push(...buildLocalScanMenuItems());
+    return [
+      ...buildLocalScanMenuItems(),
+      ...WINDOWS_MODULE_WORKSPACES.map((workspace) => ({
+        key: workspace.key,
+        icon: workspace.icon,
+        label: workspace.label,
+      })),
+    ];
   }
+
+  const menuGroups: MenuItem[] = [];
 
   menuGroups.push(
     {
@@ -429,7 +584,7 @@ const buildLinuxMenuItems = (mode: AnalysisMode): MenuItem[] => {
 
 const getDefaultOpenKeys = (mode: AnalysisMode, osType: OsType): string[] => {
   if (osType === 'Windows') {
-    return mode === 'local' ? ['scan_group', 'windows_overview_group'] : ['windows_overview_group'];
+    return mode === 'local' ? ['scan_group'] : ['windows_overview_group'];
   }
   return mode === 'local' ? ['scan_group', 'linux_overview_group'] : ['linux_overview_group'];
 };
@@ -536,11 +691,38 @@ function App() {
   const isWindowsLocalModuleContent =
     mode === 'local' &&
     osType === 'Windows';
+  const activeWindowsWorkspace = isWindowsLocalModuleContent
+    ? getWindowsWorkspace(currentModule)
+    : undefined;
+  const selectedAnalysisMenuKey = activeWindowsWorkspace?.key ?? currentModule;
   const isLinuxRemoteModuleContent =
     mode === 'remote' &&
     osType === 'Linux' &&
     !['remote_workspace', 'file_manager', 'terminal', 'settings'].includes(currentModule);
   const isFlushModuleContent = isWindowsLocalModuleContent || isLinuxRemoteModuleContent;
+  const renderModuleDetail = (moduleKey: string, compactHeader = false) => {
+    if (mode === 'none') {
+      return null;
+    }
+
+    return (
+      <ModuleDetail
+        moduleKey={moduleKey}
+        mode={mode}
+        osType={osType}
+        privilegeMode={privilegeMode}
+        sudoPassword={sudoPassword}
+        defaultDownloadPath={defaultDownloadPath}
+        isDarkMode={isDarkMode}
+        glassEnabled={glassEnabled}
+        wallpaper={wallpaper}
+        compactHeader={compactHeader}
+        onNavigate={(key) => {
+          setCurrentModule(key);
+        }}
+      />
+    );
+  };
 
   return (
     <ConfigProvider locale={zhCN} theme={{ algorithm: isDarkMode ? theme.darkAlgorithm : theme.defaultAlgorithm, token: { colorPrimary: '#1890ff' } }}>
@@ -574,7 +756,7 @@ function App() {
           <div className="sider-menu-container" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
             <Menu
               mode="inline"
-              selectedKeys={[currentModule]}
+              selectedKeys={[selectedAnalysisMenuKey]}
               defaultOpenKeys={getDefaultOpenKeys(mode, osType)}
               items={getMenuItems()}
               onClick={({ key }) => setCurrentModule(key)}
@@ -647,22 +829,17 @@ function App() {
             <div key={currentModule} className="analysis-module-view analysis-module-enter" data-module-key={currentModule}>
               <Results results={scanResults} />
             </div>
+          ) : activeWindowsWorkspace ? (
+            <div key={activeWindowsWorkspace.key} className="analysis-module-view analysis-module-enter" data-module-key={activeWindowsWorkspace.key}>
+              <WindowsModuleWorkspaceView
+                workspace={activeWindowsWorkspace}
+                initialModuleKey={currentModule}
+                renderModule={(moduleKey) => renderModuleDetail(moduleKey, true)}
+              />
+            </div>
           ) : (
             <div key={currentModule} className="analysis-module-view analysis-module-enter" data-module-key={currentModule}>
-              <ModuleDetail
-                moduleKey={currentModule}
-                mode={mode}
-                osType={osType}
-                privilegeMode={privilegeMode}
-                sudoPassword={sudoPassword}
-                defaultDownloadPath={defaultDownloadPath}
-                isDarkMode={isDarkMode}
-                glassEnabled={glassEnabled}
-                wallpaper={wallpaper}
-                onNavigate={(key) => {
-                  setCurrentModule(key);
-                }}
-              />
+              {renderModuleDetail(currentModule)}
             </div>
           )}
         </Content>

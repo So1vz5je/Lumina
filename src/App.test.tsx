@@ -101,19 +101,21 @@ describe('App authorization gate', () => {
     render(<App />);
     fireEvent.click(screen.getByText('本地分析'));
 
-    expect(await screen.findByText('系统总览')).toBeInTheDocument();
-    expect(screen.getByText('身份与进程')).toBeInTheDocument();
-    expect(screen.getByText('入口与持久化')).toBeInTheDocument();
+    expect(await screen.findByText('主机总览')).toBeInTheDocument();
+    expect(screen.getByText('账户与进程')).toBeInTheDocument();
+    expect(screen.getByText('持久化入口')).toBeInTheDocument();
     expect(screen.getByText('网络暴露')).toBeInTheDocument();
-    expect(screen.getByText('安全与日志')).toBeInTheDocument();
-    expect(screen.getByText('文件与痕迹')).toBeInTheDocument();
-    expect(screen.getByText('应用与服务')).toBeInTheDocument();
+    expect(screen.getByText('日志中心')).toBeInTheDocument();
+    expect(screen.getByText('文件痕迹')).toBeInTheDocument();
+    expect(screen.getByText('应用服务')).toBeInTheDocument();
+    expect(screen.queryByText('Security 日志')).not.toBeInTheDocument();
+    expect(screen.queryByText('Docker 容器')).not.toBeInTheDocument();
     expect(screen.queryByText('深度分析')).not.toBeInTheDocument();
     expect(screen.queryByText('PowerShell 用户配置')).not.toBeInTheDocument();
     expect(screen.queryByText('SSH 密钥')).not.toBeInTheDocument();
   });
 
-  it('shows Windows Docker and database entries under application services', async () => {
+  it('shows Windows application service modules as page tabs', async () => {
     Object.defineProperty(window.navigator, 'platform', {
       configurable: true,
       value: 'Win32',
@@ -140,11 +142,110 @@ describe('App authorization gate', () => {
 
     render(<App />);
     fireEvent.click(screen.getByText('本地分析'));
-    fireEvent.click(await screen.findByText('应用与服务'));
+    fireEvent.click(await screen.findByText('应用服务'));
 
-    expect(await screen.findByText('Docker 容器')).toBeInTheDocument();
-    expect(screen.getByText('Docker 镜像')).toBeInTheDocument();
-    expect(screen.getByText('数据库检测')).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'Docker 容器' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Docker 镜像' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '数据库检测' })).toBeInTheDocument();
+  });
+
+  it('keeps disk details inside the Windows host overview instead of a duplicate tab', async () => {
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: 'Win32',
+    });
+    invokeMock.mockResolvedValue({
+      architecture: 'x64',
+      boot_time: 0,
+      boot_time_str: '',
+      cpu_cores: 8,
+      cpu_model: 'Test CPU',
+      cpu_usage: 0,
+      current_time: '',
+      disks: [],
+      hostname: 'test-host',
+      ip_addresses: [],
+      kernel_version: '',
+      os_name: 'Windows',
+      os_version: '11',
+      timezone: '',
+      total_memory_gb: 16,
+      uptime_seconds: 0,
+      used_memory_gb: 8,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByText('本地分析'));
+    fireEvent.click(await screen.findByText('主机总览'));
+
+    expect(await screen.findByRole('tab', { name: '主机概况' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '环境变量' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: '磁盘与卷' })).not.toBeInTheDocument();
+  });
+
+  it('shows Windows log modules inside a log center page', async () => {
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: 'Win32',
+    });
+    invokeMock.mockResolvedValue({
+      architecture: 'x64',
+      boot_time: 0,
+      boot_time_str: '',
+      cpu_cores: 8,
+      cpu_model: 'Test CPU',
+      cpu_usage: 0,
+      current_time: '',
+      disks: [],
+      hostname: 'test-host',
+      ip_addresses: [],
+      kernel_version: '',
+      os_name: 'Windows',
+      os_version: '11',
+      timezone: '',
+      total_memory_gb: 16,
+      uptime_seconds: 0,
+      used_memory_gb: 8,
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByText('本地分析'));
+    fireEvent.click(await screen.findByText('日志中心'));
+
+    expect(await screen.findByRole('tab', { name: '高价值安全事件' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Security 日志' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'System 日志' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'PowerShell 日志' })).toBeInTheDocument();
+  });
+
+  it('uses a compact module header inside Windows workspace tabs', async () => {
+    Object.defineProperty(window.navigator, 'platform', {
+      configurable: true,
+      value: 'Win32',
+    });
+    invokeMock.mockResolvedValue([
+      {
+        profile: 'Domain',
+        setting: 'State',
+        value: 'OFF',
+        raw: 'State OFF',
+      },
+    ]);
+
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByText('本地分析'));
+    fireEvent.click(await screen.findByText('网络暴露'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Windows 防火墙' }));
+
+    await screen.findByRole('button', { name: /刷新/ });
+
+    const toolbar = container.querySelector('.windows-data-toolbar');
+    expect(toolbar).toBeInTheDocument();
+    expect(toolbar?.textContent).toContain('刷新');
+    expect(toolbar?.textContent).toContain('导出');
+    expect(toolbar?.textContent).toContain('设置列');
+    expect(container.querySelector('.windows-module-workspace-page .windows-module-header')).not.toBeInTheDocument();
+    expect(container.querySelector('.windows-module-workspace-page .windows-module-title')).not.toBeInTheDocument();
   });
 
   it('does not show the Windows webshell scan entry in the local analysis sidebar', async () => {
@@ -174,7 +275,7 @@ describe('App authorization gate', () => {
 
     render(<App />);
     fireEvent.click(screen.getByText('本地分析'));
-    fireEvent.click(await screen.findByText('文件与痕迹'));
+    fireEvent.click(await screen.findByText('文件痕迹'));
 
     expect(await screen.findByText('执行痕迹')).toBeInTheDocument();
     expect(screen.queryByText('Webshell 扫描')).not.toBeInTheDocument();
@@ -229,7 +330,8 @@ describe('App authorization gate', () => {
 
     const { container } = render(<App />);
     fireEvent.click(screen.getByText('本地分析'));
-    fireEvent.click(await screen.findByText('软件清单'));
+    fireEvent.click(await screen.findByText('应用服务'));
+    fireEvent.click(await screen.findByRole('tab', { name: '软件安装分析' }));
 
     expect(container.querySelector('.analysis-content')).toHaveClass('windows-local-content');
   });

@@ -669,6 +669,7 @@ interface ModuleDetailProps {
     setSearchKeyword?: (val: string) => void;
     timeRange?: 'all' | '1h' | '6h' | '24h' | '3d';
     setTimeRange?: (val: any) => void;
+    compactHeader?: boolean;
 }
 
 interface SystemInfo {
@@ -1493,7 +1494,8 @@ export default function ModuleDetail({
     searchKeyword,
     setSearchKeyword,
     timeRange,
-    setTimeRange
+    setTimeRange,
+    compactHeader = false
 }: ModuleDetailProps) {
     const cardClass = glassEnabled ? 'glass-card' : '';
     const headerBg = wallpaper ? 'transparent' : (isDarkMode ? '#1a1a1a' : '#f5f5f5');
@@ -1502,6 +1504,7 @@ export default function ModuleDetail({
     const isWindowsLocalMode = mode === 'local' && osType === 'Windows';
     const isLinuxRemoteMode = mode === 'remote' && osType === 'Linux';
     const isModuleWorkbenchMode = isWindowsLocalMode || isLinuxRemoteMode;
+    const isCompactWindowsWorkspaceModule = isWindowsLocalMode && compactHeader;
     const workbenchShellClassName = isWindowsLocalMode
         ? 'windows-module-shell'
         : isLinuxRemoteMode
@@ -1513,7 +1516,7 @@ export default function ModuleDetail({
             ? 'linux-module-workspace'
             : undefined;
     const workbenchHeaderClassName = isWindowsLocalMode
-        ? 'windows-module-header'
+        ? `windows-module-header${isCompactWindowsWorkspaceModule ? ' windows-module-header-compact' : ''}`
         : isLinuxRemoteMode
             ? 'linux-module-header'
             : undefined;
@@ -10372,32 +10375,53 @@ export default function ModuleDetail({
                     )}
                     <Text className="windows-result-count" type="secondary">共 {filteredCount} 条结果</Text>
                 </div>
-                <Popover
-                    trigger="click"
-                    placement="bottomRight"
-                    content={
-                        <div style={{ maxHeight: 300, overflow: 'auto' }}>
-                            {allColumns.map(col => (
-                                <div key={col.dataIndex} style={{ padding: '4px 0' }}>
-                                    <Checkbox
-                                        checked={!hiddenColumns.includes(col.dataIndex as string)}
-                                        onChange={(e) => {
-                                            if (e.target.checked) {
-                                                setHiddenColumns(prev => prev.filter(c => c !== col.dataIndex));
-                                            } else {
-                                                setHiddenColumns(prev => [...prev, col.dataIndex as string]);
-                                            }
-                                        }}
-                                    >
-                                        {col.title as string}
-                                    </Checkbox>
-                                </div>
-                            ))}
-                        </div>
-                    }
-                >
-                    <Button icon={<SettingOutlined />}>设置列</Button>
-                </Popover>
+                <div className="windows-data-toolbar-actions">
+                    {isCompactWindowsWorkspaceModule && (
+                        <Button
+                            icon={<ReloadOutlined spin={loading} />}
+                            onClick={loadData}
+                            loading={loading}
+                            title="刷新数据"
+                        >
+                            刷新
+                        </Button>
+                    )}
+                    {isCompactWindowsWorkspaceModule && tableData.length > 0 && (
+                        <Button
+                            icon={<DownloadOutlined />}
+                            onClick={exportToCsv}
+                            title="导出CSV"
+                        >
+                            导出
+                        </Button>
+                    )}
+                    <Popover
+                        trigger="click"
+                        placement="bottomRight"
+                        content={
+                            <div style={{ maxHeight: 300, overflow: 'auto' }}>
+                                {allColumns.map(col => (
+                                    <div key={col.dataIndex} style={{ padding: '4px 0' }}>
+                                        <Checkbox
+                                            checked={!hiddenColumns.includes(col.dataIndex as string)}
+                                            onChange={(e) => {
+                                                if (e.target.checked) {
+                                                    setHiddenColumns(prev => prev.filter(c => c !== col.dataIndex));
+                                                } else {
+                                                    setHiddenColumns(prev => [...prev, col.dataIndex as string]);
+                                                }
+                                            }}
+                                        >
+                                            {col.title as string}
+                                        </Checkbox>
+                                    </div>
+                                ))}
+                            </div>
+                        }
+                    >
+                        <Button icon={<SettingOutlined />}>设置列</Button>
+                    </Popover>
+                </div>
             </div>
         );
     };
@@ -10598,12 +10622,14 @@ export default function ModuleDetail({
             ? { color: 'green', label: '已采集' }
             : { color: 'default', label: '等待采集' };
     const showModuleMetaTags = loading || Boolean(collectionDiagnostic) || (!tableData.length && !hasCollectedSystemInfo);
+    const showWorkbenchHeader = !isCompactWindowsWorkspaceModule || !showSearch;
 
     return (
         <div className={workbenchShellClassName} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <div className={workbenchWorkspaceClassName} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' }}>
             {/* 固定头部 */}
-            <div 
+            {showWorkbenchHeader && (
+            <div
                 className={isModuleWorkbenchMode ? workbenchHeaderClassName : (glassEnabled ? 'glass-header-container' : '')} 
                 style={glassEnabled ? { flexShrink: 0 } : {
                     flexShrink: 0,
@@ -10615,10 +10641,14 @@ export default function ModuleDetail({
             >
                 {/* 标题行 */}
                 <div className={isModuleWorkbenchMode ? workbenchTitlebarClassName : undefined} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Title className={isModuleWorkbenchMode ? workbenchTitleClassName : undefined} level={4} style={{ margin: 0 }}>{displayTitle}</Title>
-                    {moduleMeta && <Tag color={isLinuxRemoteMode ? 'green' : 'geekblue'}>{moduleMeta.group}</Tag>}
-                    <Tag color={mode === 'local' ? 'blue' : 'green'}>{mode === 'local' ? '本地' : '远程'}</Tag>
-                    {mode === 'remote' && privilegeMode !== 'none' && <Tag color="orange">{privilegeMode}</Tag>}
+                    {!isCompactWindowsWorkspaceModule && (
+                        <>
+                            <Title className={isModuleWorkbenchMode ? workbenchTitleClassName : undefined} level={4} style={{ margin: 0 }}>{displayTitle}</Title>
+                            {moduleMeta && <Tag color={isLinuxRemoteMode ? 'green' : 'geekblue'}>{moduleMeta.group}</Tag>}
+                            <Tag color={mode === 'local' ? 'blue' : 'green'}>{mode === 'local' ? '本地' : '远程'}</Tag>
+                            {mode === 'remote' && privilegeMode !== 'none' && <Tag color="orange">{privilegeMode}</Tag>}
+                        </>
+                    )}
                     <Button
                         type="text"
                         icon={<ReloadOutlined spin={loading} />}
@@ -10641,7 +10671,7 @@ export default function ModuleDetail({
                     )}
                 </div>
                 {/* 分隔线 */}
-                {moduleMeta && (
+                {moduleMeta && !isCompactWindowsWorkspaceModule && (
                     <div className={workbenchMetaClassName} style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                         <Text type="secondary" style={{ fontSize: 12 }}>{moduleMeta.description}</Text>
                         {showModuleMetaTags ? (
@@ -10723,6 +10753,7 @@ export default function ModuleDetail({
                     </div>
                 )}
             </div>
+            )}
             {/* 滚动内容区 */}
             <div className={isModuleWorkbenchMode ? workbenchBodyClassName : undefined} style={{
                 flex: 1,
