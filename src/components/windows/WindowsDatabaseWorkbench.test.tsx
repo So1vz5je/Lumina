@@ -291,6 +291,17 @@ describe('windows database detail contract', () => {
     expect(tableItem).toHaveStyle('border: none');
   });
 
+  it('uses dark theme colors when opened from a dark analysis workspace', async () => {
+    const onRequest = vi.fn().mockResolvedValueOnce({ databases: ['appdb'] });
+
+    render(<WindowsDatabaseWorkbench instance={mysqlWorkbenchInstance()} onRequest={onRequest} isDarkMode />);
+
+    const workbench = await screen.findByTestId('windows-database-workbench');
+    expect(workbench).toHaveClass('windows-database-workbench-dark');
+    expect(workbench).toHaveStyle('background: #111923');
+    expect(workbench).toHaveStyle('border-color: #273548');
+  });
+
   it('blocks non-readonly queries in the UI before sending them', async () => {
     const instance: WindowsDatabaseInstance = {
       id: 'mysql:127.0.0.1:3306',

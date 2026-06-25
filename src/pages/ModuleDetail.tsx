@@ -347,13 +347,49 @@ const normalizeWindowsDatabaseReadonlyResponse = (
 };
 
 // 本地系统信息组件（优化版）
-const LocalSystemInfoView = ({ systemInfo }: { systemInfo: SystemInfo }) => {
+interface LocalDiskTableRow {
+    key: string;
+    mount: string;
+    size: string;
+    used: string;
+    avail: string;
+    percent: number;
+}
+
+const formatLocalDiskGb = (value: unknown): string => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return `${value.toFixed(1)} GB`;
+    }
+
+    if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+    }
+
+    return '-';
+};
+
+const normalizeLocalDiskRows = (disks: any[]): LocalDiskTableRow[] => disks.map((disk, index) => {
+    const mount = String(disk?.mount ?? disk?.mount_point ?? disk?.name ?? '-').trim() || '-';
+    const percentValue = Number(disk?.percent ?? disk?.usage_percent ?? 0);
+
+    return {
+        key: `${mount}-${index}`,
+        mount,
+        size: formatLocalDiskGb(disk?.size ?? disk?.total_gb),
+        used: formatLocalDiskGb(disk?.used ?? disk?.used_gb),
+        avail: formatLocalDiskGb(disk?.avail ?? disk?.free_gb),
+        percent: Number.isFinite(percentValue) ? Math.round(percentValue) : 0,
+    };
+});
+
+const LocalSystemInfoView = ({ systemInfo, isDarkMode = false }: { systemInfo: SystemInfo; isDarkMode?: boolean }) => {
     const memoryPercent = useMemo(
         () => Math.round((systemInfo.used_memory_gb / systemInfo.total_memory_gb) * 100),
         [systemInfo.used_memory_gb, systemInfo.total_memory_gb]
     );
 
     const cpuUsage = useMemo(() => Math.round(systemInfo.cpu_usage), [systemInfo.cpu_usage]);
+    const diskRows = useMemo(() => normalizeLocalDiskRows(systemInfo.disks), [systemInfo.disks]);
 
     const formatUptime = (seconds: number) => {
         const days = Math.floor(seconds / 86400);
@@ -365,7 +401,13 @@ const LocalSystemInfoView = ({ systemInfo }: { systemInfo: SystemInfo }) => {
     };
 
     return (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Space
+            className={`local-system-info${isDarkMode ? ' local-system-info-dark' : ''}`}
+            data-testid="local-system-info"
+            direction="vertical"
+            size="middle"
+            style={{ width: '100%' }}
+        >
             {/* 顶部横幅 */}
             <Card size="small">
                 <Row align="middle" gutter={24}>
@@ -436,7 +478,7 @@ const LocalSystemInfoView = ({ systemInfo }: { systemInfo: SystemInfo }) => {
                             valueStyle={{ fontSize: 28 }}
                         />
                         <div style={{ marginTop: 16 }}>
-                            <Text type="secondary">磁盘数量: {systemInfo.disks.length}</Text>
+                            <Text type="secondary">磁盘数量: {diskRows.length}</Text>
                         </div>
                     </Col>
                 </Row>
@@ -457,10 +499,10 @@ const LocalSystemInfoView = ({ systemInfo }: { systemInfo: SystemInfo }) => {
                         <Descriptions.Item label="当前时间" span={2}>{systemInfo.current_time}</Descriptions.Item>
                     </Descriptions>
                 </Collapse.Panel>
-                {systemInfo.disks.length > 0 && (
+                {diskRows.length > 0 && (
                     <Collapse.Panel header="磁盘详情" key="disks">
                         <Table
-                            dataSource={systemInfo.disks}
+                            dataSource={diskRows}
                             columns={[
                                 { title: '挂载点', dataIndex: 'mount', key: 'mount' },
                                 { title: '大小', dataIndex: 'size', key: 'size', width: 100 },
@@ -483,6 +525,7 @@ const LocalSystemInfoView = ({ systemInfo }: { systemInfo: SystemInfo }) => {
                             size="small"
                             pagination={false}
                             scroll={{ y: 300 }}
+                            rowKey="key"
                         />
                     </Collapse.Panel>
                 )}
@@ -492,7 +535,7 @@ const LocalSystemInfoView = ({ systemInfo }: { systemInfo: SystemInfo }) => {
 };
 
 // 远程系统信息组件（优化版）
-const RemoteSystemInfoView = ({ systemInfo }: { systemInfo: RemoteSystemInfo }) => {
+const RemoteSystemInfoView = ({ systemInfo, isDarkMode = false }: { systemInfo: RemoteSystemInfo; isDarkMode?: boolean }) => {
     const memPercent = useMemo(
         () => Math.round(systemInfo.mem_percent || 0),
         [systemInfo.mem_percent]
@@ -527,7 +570,13 @@ const RemoteSystemInfoView = ({ systemInfo }: { systemInfo: RemoteSystemInfo }) 
     }, [systemInfo]);
 
     return (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Space
+            className={`remote-system-info${isDarkMode ? ' remote-system-info-dark' : ''}`}
+            data-testid="remote-system-info"
+            direction="vertical"
+            size="middle"
+            style={{ width: '100%' }}
+        >
             {/* 顶部横幅 */}
             <Card size="small">
                 <Row align="middle" gutter={24}>
@@ -10500,10 +10549,10 @@ export default function ModuleDetail({
         if (moduleKey === 'terminal') return renderTerminal();
         if (moduleKey === 'file_manager') return renderFileManager();
         if (moduleKey === 'system_info' && mode === 'local') {
-            return systemInfo ? <LocalSystemInfoView systemInfo={systemInfo} /> : <Spin tip="正在加载系统信息..." />;
+            return systemInfo ? <LocalSystemInfoView systemInfo={systemInfo} isDarkMode={isDarkMode} /> : <Spin tip="正在加载系统信息..." />;
         }
         if (moduleKey === 'system_info' && mode === 'remote') {
-            return remoteSystemInfo ? <RemoteSystemInfoView systemInfo={remoteSystemInfo} /> : <Spin tip="正在加载系统信息..." />;
+            return remoteSystemInfo ? <RemoteSystemInfoView systemInfo={remoteSystemInfo} isDarkMode={isDarkMode} /> : <Spin tip="正在加载系统信息..." />;
         }
         if (collectionDiagnostic) return renderCollectionDiagnostic();
         if (moduleKey === 'suspicious_files') return <>{renderSuspiciousFiles()}</>;
@@ -10951,7 +11000,7 @@ export default function ModuleDetail({
                 onCancel={() => setWindowsDatabaseWorkbenchOpen(false)}
                 footer={null}
                 width="min(1280px, calc(100vw - 48px))"
-                className="windows-database-modal"
+                className={`windows-database-modal${isDarkMode ? ' windows-database-modal-dark' : ''}`}
                 destroyOnHidden
                 styles={{
                     body: {
@@ -10966,6 +11015,7 @@ export default function ModuleDetail({
                         instance={selectedWindowsDatabaseInstance}
                         onRequest={requestWindowsDatabaseReadonly}
                         onMutation={requestWindowsDatabaseMutation}
+                        isDarkMode={isDarkMode}
                     />
                 ) : null}
             </Modal>

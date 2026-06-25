@@ -54,7 +54,7 @@ const windowsMenuModuleKeys = [
   'database',
 ];
 
-function renderWindowsModule(moduleKey: string) {
+function renderWindowsModule(moduleKey: string, options: { isDarkMode?: boolean } = {}) {
   return render(
     <ModuleDetail
       moduleKey={moduleKey}
@@ -62,7 +62,7 @@ function renderWindowsModule(moduleKey: string) {
       osType="Windows"
       privilegeMode="none"
       sudoPassword=""
-      isDarkMode={false}
+      isDarkMode={options.isDarkMode ?? false}
       glassEnabled={false}
       wallpaper=""
     />,
@@ -278,6 +278,48 @@ describe('Windows local analysis commands', () => {
     await waitFor(() => expect(screen.getByText('WIN-IR')).toBeInTheDocument());
     expect(screen.queryByText('等待采集')).not.toBeInTheDocument();
     expect(screen.queryByText('已采集')).not.toBeInTheDocument();
+  });
+
+  it('renders local Windows disk mount points from backend disk fields in dark mode', async () => {
+    mockWindowsLocalCommand({
+      os_name: 'Windows',
+      os_version: 'Server 2022',
+      hostname: 'WIN-IR',
+      kernel_version: '10.0.20348',
+      cpu_usage: 12,
+      cpu_cores: 8,
+      total_memory_gb: 32,
+      used_memory_gb: 18,
+      uptime_seconds: 86400,
+      boot_time_str: '2026-06-22 10:00:00',
+      timezone: 'Asia/Shanghai',
+      current_time: '2026-06-23 10:00:00',
+      cpu_model: 'Intel Xeon',
+      architecture: 'x64',
+      disks: [
+        {
+          name: 'Local Disk',
+          mount_point: 'C:\\',
+          total_gb: 512,
+          used_gb: 120,
+          free_gb: 392,
+          usage_percent: 23.4,
+        },
+      ],
+      ip_addresses: ['10.0.0.5'],
+    });
+
+    const { container } = renderWindowsModule('system_info', { isDarkMode: true });
+
+    await waitFor(() => expect(screen.getByText('WIN-IR')).toBeInTheDocument());
+    expect(container.querySelector('.local-system-info-dark')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('\u78c1\u76d8\u8be6\u60c5'));
+
+    expect(await screen.findByText('C:\\')).toBeInTheDocument();
+    expect(screen.getByText('512.0 GB')).toBeInTheDocument();
+    expect(screen.getByText('120.0 GB')).toBeInTheDocument();
+    expect(screen.getByText('392.0 GB')).toBeInTheDocument();
   });
 
   it('shows Docker installation evidence even when Docker Desktop is installed but not running', async () => {

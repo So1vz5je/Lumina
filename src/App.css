@@ -2630,6 +2630,17 @@ body {
   max-height: calc(100vh - 64px);
 }
 
+.windows-database-modal-dark .ant-modal-content,
+.windows-database-modal-dark .ant-modal-header {
+  background: #111923 !important;
+  color: #d7dee8 !important;
+}
+
+.windows-database-modal-dark .ant-modal-title,
+.windows-database-modal-dark .ant-modal-close {
+  color: #f3f6fa !important;
+}
+
 .windows-database-workbench .windows-database-tabs.ant-tabs {
   display: flex;
   flex-direction: column;
@@ -2672,6 +2683,194 @@ body {
   box-shadow: none !important;
   appearance: none;
   forced-color-adjust: none;
+}
+
+.windows-database-workbench-dark .ant-typography,
+.windows-database-workbench-dark .ant-tabs-tab {
+  color: #d7dee8 !important;
+}
+
+.windows-database-workbench-dark .ant-typography-secondary {
+  color: #98a6ba !important;
+}
+
+.windows-database-workbench-dark .ant-tabs-nav::before {
+  border-bottom-color: #273548 !important;
+}
+
+.windows-database-workbench-dark .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #5eead4 !important;
+}
+
+.windows-database-workbench-dark .ant-table,
+.windows-database-workbench-dark .ant-table-container,
+.windows-database-workbench-dark .ant-table-content,
+.windows-database-workbench-dark .ant-table-body {
+  background: #111923 !important;
+  color: #d7dee8 !important;
+}
+
+.windows-database-workbench-dark .ant-table-thead > tr > th {
+  background: #172231 !important;
+  border-bottom-color: #2b3a4f !important;
+  color: #d7dee8 !important;
+}
+
+.windows-database-workbench-dark .ant-table-tbody > tr > td {
+  background: #111923 !important;
+  border-bottom-color: #223044 !important;
+  color: #d7dee8 !important;
+}
+
+.windows-database-workbench-dark .ant-table-tbody > tr:hover > td {
+  background: #172231 !important;
+}
+
+.windows-database-workbench-dark .ant-input,
+.windows-database-workbench-dark .ant-input-number,
+.windows-database-workbench-dark .ant-input-number-input,
+.windows-database-workbench-dark .ant-input-number-handler-wrap {
+  background: #0c1118 !important;
+  border-color: #334155 !important;
+  color: #d7dee8 !important;
+}
+
+.windows-database-workbench-dark .ant-pagination-item,
+.windows-database-workbench-dark .ant-pagination-prev .ant-pagination-item-link,
+.windows-database-workbench-dark .ant-pagination-next .ant-pagination-item-link {
+  background: #0c1118 !important;
+  border-color: #334155 !important;
+  color: #d7dee8 !important;
+}
+
+.windows-database-workbench-dark .ant-pagination-item-active {
+  border-color: #5eead4 !important;
+}
+
+.windows-database-workbench-dark .ant-empty-description {
+  color: #98a6ba !important;
+}
+
+.local-system-info-dark .ant-card,
+.local-system-info-dark .ant-collapse,
+.local-system-info-dark .ant-collapse-content,
+.local-system-info-dark .ant-collapse-item {
+  background: #111923 !important;
+  border-color: #273548 !important;
+  color: #d7dee8 !important;
+}
+
+.local-system-info-dark .ant-card-head,
+.local-system-info-dark .ant-collapse-header {
+  background: #111923 !important;
+  border-color: #273548 !important;
+  color: #f3f6fa !important;
+}
+
+.local-system-info-dark .ant-card-body,
+.local-system-info-dark .ant-collapse-content-box {
+  background: #111923 !important;
+  color: #d7dee8 !important;
+}
+
+.local-system-info-dark .ant-typography,
+.local-system-info-dark .ant-statistic-title,
+.local-system-info-dark .ant-statistic-content,
+.local-system-info-dark .ant-descriptions-item-label,
+.local-system-info-dark .ant-descriptions-item-content {
+  color: #d7dee8 !important;
+}
+
+.local-system-info-dark .ant-typography-secondary {
+  color: #98a6ba !important;
+}
+
+.local-system-info-dark .ant-descriptions-view,
+.local-system-info-dark .ant-descriptions-item-label,
+.local-system-info-dark .ant-descriptions-item-content,
+.local-system-info-dark .ant-table,
+.local-system-info-dark .ant-table-container,
+.local-system-info-dark .ant-table-content,
+.local-system-info-dark .ant-table-body {
+  background: #111923 !important;
+  border-color: #273548 !important;
+}
+
+.local-system-info-dark .ant-table-thead > tr > th {
+  background: #172231 !important;
+  border-bottom-color: #2b3a4f !important;
+  color: #d7dee8 !important;
+}
+
+.local-system-info-dark .ant-table-tbody > tr > td {
+  background: #111923 !important;
+  border-bottom-color: #223044 !important;
+  color: #d7dee8 !important;
+}
+
+.local-system-info-dark .ant-table-tbody > tr:hover > td {
+  background: #172231 !important;
+}
+
+.remote-system-info-dark .ant-card,
+.remote-system-info-dark .ant-collapse,
+.remote-system-info-dark .ant-collapse-content,
+.remote-system-info-dark .ant-collapse-item {
+  background: #111923 !important;
+  border-color: #273548 !important;
+  color: #d7dee8 !important;
+}
+
+.remote-system-info-dark .ant-card-head,
+.remote-system-info-dark .ant-collapse-header {
+  background: #111923 !important;
+  border-color: #273548 !important;
+  color: #f3f6fa !important;
+}
+
+.remote-system-info-dark .ant-card-body,
+.remote-system-info-dark .ant-collapse-content-box {
+  background: #111923 !important;
+  color: #d7dee8 !important;
+}
+
+.remote-system-info-dark .ant-typography,
+.remote-system-info-dark .ant-statistic-title,
+.remote-system-info-dark .ant-statistic-content,
+.remote-system-info-dark .ant-descriptions-item-label,
+.remote-system-info-dark .ant-descriptions-item-content {
+  color: #d7dee8 !important;
+}
+
+.remote-system-info-dark .ant-typography-secondary {
+  color: #98a6ba !important;
+}
+
+.remote-system-info-dark .ant-descriptions-view,
+.remote-system-info-dark .ant-descriptions-item-label,
+.remote-system-info-dark .ant-descriptions-item-content,
+.remote-system-info-dark .ant-table,
+.remote-system-info-dark .ant-table-container,
+.remote-system-info-dark .ant-table-content,
+.remote-system-info-dark .ant-table-body {
+  background: #111923 !important;
+  border-color: #273548 !important;
+}
+
+.remote-system-info-dark .ant-table-thead > tr > th {
+  background: #172231 !important;
+  border-bottom-color: #2b3a4f !important;
+  color: #d7dee8 !important;
+}
+
+.remote-system-info-dark .ant-table-tbody > tr > td {
+  background: #111923 !important;
+  border-bottom-color: #223044 !important;
+  color: #d7dee8 !important;
+}
+
+.remote-system-info-dark .ant-table-tbody > tr:hover > td {
+  background: #172231 !important;
 }
 
 /* ===== Windows Local Analysis Surface ===== */

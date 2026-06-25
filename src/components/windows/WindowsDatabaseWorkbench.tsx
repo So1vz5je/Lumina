@@ -78,6 +78,7 @@ interface WindowsDatabaseWorkbenchProps {
     rowLimit?: number;
   }) => Promise<any>;
   onMutation?: (request: WindowsDatabaseMutationRequest) => Promise<WindowsDatabaseMutationResponse>;
+  isDarkMode?: boolean;
 }
 
 interface QueryResultTable {
@@ -298,6 +299,7 @@ export function WindowsDatabaseWorkbench({
   instance,
   onRequest,
   onMutation,
+  isDarkMode = false,
 }: WindowsDatabaseWorkbenchProps) {
   const [databases, setDatabases] = useState<string[]>([]);
   const [tables, setTables] = useState<WindowsDatabaseTableRef[]>([]);
@@ -324,6 +326,7 @@ export function WindowsDatabaseWorkbench({
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [mutationSuccess, setMutationSuccess] = useState<string | null>(null);
   const [modal, modalContextHolder] = Modal.useModal();
+  const darkStyle = isDarkMode ? darkStyles : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -751,8 +754,12 @@ export function WindowsDatabaseWorkbench({
   };
 
   return (
-    <div className="windows-database-workbench" data-testid="windows-database-workbench" style={styles.root}>
-      <div style={styles.header}>
+    <div
+      className={`windows-database-workbench${isDarkMode ? ' windows-database-workbench-dark' : ''}`}
+      data-testid="windows-database-workbench"
+      style={{ ...styles.root, ...(darkStyle?.root ?? null) }}
+    >
+      <div style={{ ...styles.header, ...(darkStyle?.header ?? null) }}>
         <div style={styles.headerRow}>
           <Title level={5} style={{ margin: 0 }}>
             {ENGINE_LABELS[instance.engine]}
@@ -770,9 +777,9 @@ export function WindowsDatabaseWorkbench({
       </div>
 
       <div style={styles.workspace}>
-        <div data-testid="windows-database-nav" style={styles.navRail}>
-          <div style={styles.navSection}>
-            <div style={styles.sectionHeader}>
+        <div data-testid="windows-database-nav" style={{ ...styles.navRail, ...(darkStyle?.navRail ?? null) }}>
+          <div style={{ ...styles.navSection, ...(darkStyle?.navSection ?? null) }}>
+            <div style={{ ...styles.sectionHeader, ...(darkStyle?.sectionHeader ?? null) }}>
               <Text strong>数据库</Text>
               <Text type="secondary">{databases.length}</Text>
             </div>
@@ -796,7 +803,10 @@ export function WindowsDatabaseWorkbench({
                         }}
                         style={{
                           ...styles.navButton,
-                          ...(selectedDatabase === database ? styles.navButtonActive : null),
+                          ...(darkStyle?.navButton ?? null),
+                          ...(selectedDatabase === database
+                            ? { ...styles.navButtonActive, ...(darkStyle?.navButtonActive ?? null) }
+                            : null),
                         }}
                       >
                         <span>{database}</span>
@@ -808,8 +818,8 @@ export function WindowsDatabaseWorkbench({
             </div>
           </div>
 
-          <div style={{ ...styles.navSection, borderBottom: 'none' }}>
-            <div style={styles.sectionHeader}>
+          <div style={{ ...styles.navSection, ...(darkStyle?.navSection ?? null), borderBottom: 'none' }}>
+            <div style={{ ...styles.sectionHeader, ...(darkStyle?.sectionHeader ?? null) }}>
               <Text strong>表</Text>
               <Text type="secondary">{tables.length}</Text>
             </div>
@@ -842,7 +852,8 @@ export function WindowsDatabaseWorkbench({
                           }}
                           style={{
                             ...styles.navButton,
-                            ...(selected ? styles.navButtonActive : null),
+                            ...(darkStyle?.navButton ?? null),
+                            ...(selected ? { ...styles.navButtonActive, ...(darkStyle?.navButtonActive ?? null) } : null),
                           }}
                         >
                           <span style={styles.tableName}>{table.name}</span>
@@ -862,7 +873,7 @@ export function WindowsDatabaseWorkbench({
           </div>
         </div>
 
-        <div style={styles.resultPane}>
+        <div style={{ ...styles.resultPane, ...(darkStyle?.resultPane ?? null) }}>
           <Tabs
             className="windows-database-tabs"
             activeKey={activeTab}
@@ -1215,6 +1226,39 @@ const styles: Record<string, CSSProperties> = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+  },
+};
+
+const darkStyles: Record<string, CSSProperties> = {
+  root: {
+    borderColor: '#273548',
+    background: '#111923',
+    color: '#d7dee8',
+  },
+  header: {
+    borderBottomColor: '#273548',
+    background: '#111923',
+  },
+  navRail: {
+    borderRightColor: '#273548',
+    background: '#0c1118',
+  },
+  navSection: {
+    borderBottomColor: '#273548',
+  },
+  sectionHeader: {
+    borderBottomColor: '#273548',
+    background: '#111923',
+  },
+  navButton: {
+    color: '#d7dee8',
+  },
+  navButtonActive: {
+    background: '#10243c',
+    color: '#f3f6fa',
+  },
+  resultPane: {
+    background: '#111923',
   },
 };
 

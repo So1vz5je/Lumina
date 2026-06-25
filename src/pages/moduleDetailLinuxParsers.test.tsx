@@ -91,7 +91,7 @@ function renderRemoteModule(moduleKey: string, stdout: string) {
   );
 }
 
-function renderRemoteSystemInfo(commandOutputs: Record<string, string>) {
+function renderRemoteSystemInfo(commandOutputs: Record<string, string>, options: { isDarkMode?: boolean } = {}) {
   invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
     if (command === 'ssh_execute') {
       return {
@@ -104,14 +104,14 @@ function renderRemoteSystemInfo(commandOutputs: Record<string, string>) {
     throw new Error(`Unexpected command: ${command}`);
   });
 
-  render(
+  return render(
     <ModuleDetail
       moduleKey="system_info"
       mode="remote"
       osType="Linux"
       privilegeMode="none"
       sudoPassword=""
-      isDarkMode={false}
+      isDarkMode={options.isDarkMode ?? false}
       glassEnabled={false}
       wallpaper=""
     />,
@@ -180,6 +180,40 @@ describe('ModuleDetail Linux remote module rendering', () => {
     await waitFor(() => expect(screen.getAllByText('prod-web-01').length).toBeGreaterThan(0));
     expect(screen.queryByText('等待采集')).not.toBeInTheDocument();
     expect(screen.queryByText('已采集')).not.toBeInTheDocument();
+  });
+
+  it('keeps remote Linux disk details themed in dark mode', async () => {
+    const { container } = renderRemoteSystemInfo({
+      hostname: 'prod-web-01',
+      'cat /etc/os-release 2>/dev/null': [
+        'NAME="Ubuntu"',
+        'VERSION="24.04.2 LTS"',
+        'PRETTY_NAME="Ubuntu 24.04.2 LTS"',
+        'VERSION_ID="24.04"',
+      ].join('\n'),
+      uptime: ' 17:10:01 up 48 days,  2 users,  load average: 0.11, 0.08, 0.05',
+      'free -h | grep Mem': 'Mem: 1.6Gi 1.2Gi 300Mi 20Mi 100Mi 400Mi',
+      'df -h | grep -E "^/dev"': [
+        '/dev/vda1 40G 11G 27G 29% /',
+        '/dev/vdb1 80G 18G 62G 23% /data',
+      ].join('\n'),
+      nproc: '2',
+      'hostname -I 2>/dev/null | awk \'{print $1}\' || ip addr show | grep "inet " | head -1 | awk \'{print $2}\'': '10.0.0.5',
+      'uname -r': '6.8.0-60-generic',
+      'uname -m': 'x86_64',
+      'cat /proc/cpuinfo | grep "model name" | head -1 | cut -d: -f2': ' Intel(R) Xeon(R)',
+      'cat /etc/issue 2>/dev/null | head -1': 'Ubuntu 24.04.2 LTS \\n \\l',
+      'cat /etc/redhat-release 2>/dev/null || cat /etc/centos-release 2>/dev/null || cat /etc/system-release 2>/dev/null': '',
+    }, { isDarkMode: true });
+
+    await waitFor(() => expect(screen.getAllByText('prod-web-01').length).toBeGreaterThan(0));
+    expect(container.querySelector('.remote-system-info-dark')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('磁盘详情'));
+
+    expect(await screen.findByText('/')).toBeInTheDocument();
+    expect(screen.getByText('/data')).toBeInTheDocument();
+    expect(container.querySelector('.remote-system-info-dark .ant-table')).toBeInTheDocument();
   });
 
   it('shows a clear diagnostic when a remote module cannot collect data because of permissions', async () => {
