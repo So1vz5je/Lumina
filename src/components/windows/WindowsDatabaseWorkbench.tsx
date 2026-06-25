@@ -24,6 +24,8 @@ const { TextArea } = Input;
 
 const NAV_WIDTH = 280;
 const TABLE_SCROLL_HEIGHT = 280;
+const PREVIEW_COLUMN_WIDTH = 160;
+const PREVIEW_PAGE_SIZE = 20;
 const DEFAULT_READONLY_ROW_LIMIT = 50;
 const MAX_READONLY_ROW_LIMIT = 100;
 const EMPTY_QUERY_ERROR = '请输入只读 SQL';
@@ -321,6 +323,7 @@ export function WindowsDatabaseWorkbench({
   const [queryError, setQueryError] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [mutationSuccess, setMutationSuccess] = useState<string | null>(null);
+  const [modal, modalContextHolder] = Modal.useModal();
 
   useEffect(() => {
     let cancelled = false;
@@ -382,6 +385,7 @@ export function WindowsDatabaseWorkbench({
         title: column,
         dataIndex: column,
         key: column,
+        width: PREVIEW_COLUMN_WIDTH,
         ellipsis: true,
         render: (value: unknown, row: Record<string, unknown>) => renderPreviewCell(value, row),
       })),
@@ -418,6 +422,14 @@ export function WindowsDatabaseWorkbench({
   );
 
   const editableColumns = useMemo(() => getWindowsDatabaseEditableColumns(columns), [columns]);
+  const previewScrollX = Math.max((previewResult?.columns.length ?? 0) * PREVIEW_COLUMN_WIDTH, 720);
+  const previewPagination = previewRows.length > PREVIEW_PAGE_SIZE
+    ? {
+        size: 'small' as const,
+        pageSize: PREVIEW_PAGE_SIZE,
+        showSizeChanger: false,
+      }
+    : false;
 
   const generatedColumnNames = useMemo(
     () =>
@@ -627,7 +639,7 @@ export function WindowsDatabaseWorkbench({
       return;
     }
 
-    Modal.confirm({
+    modal.confirm({
       title: '确认删除这一行？',
       okText: '删除',
       cancelText: '取消',
@@ -918,18 +930,6 @@ export function WindowsDatabaseWorkbench({
                           : '预览固定行数的原始数据'}
                       </Text>
                     </div>
-                    <div style={styles.queryToolbar}>
-                      <span />
-                      <Button
-                        size="small"
-                        type="primary"
-                        aria-label="新增行"
-                        onClick={openInsertEditor}
-                        disabled={!selectedTable || !onMutation || mutationLoading}
-                      >
-                        新增行
-                      </Button>
-                    </div>
                     <div style={styles.tablePanel}>
                       <Spin spinning={detailLoading}>
                         {!previewResult || previewResult.columns.length === 0 ? (
@@ -937,9 +937,9 @@ export function WindowsDatabaseWorkbench({
                         ) : (
                           <Table
                             size="small"
-                            pagination={false}
+                            pagination={previewPagination}
                             rowKey="__workbenchRowKey"
-                            scroll={{ y: TABLE_SCROLL_HEIGHT, x: 'max-content' }}
+                            scroll={{ y: TABLE_SCROLL_HEIGHT, x: previewScrollX }}
                             dataSource={previewRows}
                             columns={previewColumns}
                           />
@@ -1028,6 +1028,7 @@ export function WindowsDatabaseWorkbench({
         onCancel={() => setRowEditorOpen(false)}
         onSubmit={(values) => void submitRowMutation(values)}
       />
+      {modalContextHolder}
     </div>
   );
 }
@@ -1157,11 +1158,11 @@ const styles: Record<string, CSSProperties> = {
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: 12,
+    gap: 8,
     overflow: 'hidden',
   },
   tabSummary: {
-    minHeight: 22,
+    minHeight: 20,
   },
   tablePanel: {
     flex: 1,

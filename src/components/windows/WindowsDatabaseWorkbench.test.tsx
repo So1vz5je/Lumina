@@ -392,7 +392,7 @@ describe('windows database detail contract', () => {
 
     expect(screen.queryByRole('switch', { name: /编辑模式/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: '操作' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /新增行/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /新增行/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /复制/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /编辑/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument();
@@ -403,6 +403,39 @@ describe('windows database detail contract', () => {
     expect(screen.getByRole('menuitem', { name: /新增/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /编辑/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /删除/ })).toBeInTheDocument();
+  });
+
+  it('paginates large preview results while keeping wide column sets scrollable', async () => {
+    const previewColumns = Array.from({ length: 12 }, (_, index) => `col_${index + 1}`);
+    const previewRows = Array.from({ length: 25 }, (_, rowIndex) =>
+      Object.fromEntries(previewColumns.map((column, columnIndex) => [column, `value-${rowIndex}-${columnIndex}`])),
+    );
+    const onRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ databases: ['appdb'] })
+      .mockResolvedValueOnce({ tables: [{ schema: 'dbo', name: 'wide_table' }] })
+      .mockResolvedValueOnce({
+        columns: previewColumns.map((name) => ({ name, dataType: 'varchar(255)', nullable: true })),
+      })
+      .mockResolvedValueOnce({
+        columns: previewColumns,
+        rows: previewRows,
+        rowCount: previewRows.length,
+        truncated: false,
+      });
+    const { container } = render(
+      <WindowsDatabaseWorkbench instance={mysqlWorkbenchInstance()} onRequest={onRequest} onMutation={vi.fn()} />,
+    );
+
+    expect(await screen.findByText('appdb')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('appdb'));
+    fireEvent.click(await screen.findByText('wide_table'));
+    expect(await screen.findByText('col_12')).toBeInTheDocument();
+    fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
+
+    expect(await screen.findByText('value-0-11')).toBeInTheDocument();
+    expect(screen.getByTitle('2')).toBeInTheDocument();
+    expect(screen.getAllByRole('table').some((table) => table.getAttribute('style')?.includes('width: 1920px'))).toBe(true);
   });
 
   it('submits a controlled row update and refreshes preview', async () => {
