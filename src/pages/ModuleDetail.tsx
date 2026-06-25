@@ -8,6 +8,8 @@ import { join } from '@tauri-apps/api/path';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { MenuProps } from 'antd';
 import WindowsDatabaseWorkbench from '../components/windows/WindowsDatabaseWorkbench';
+import WindowsPanelDetectionView from '../components/windows/WindowsPanelDetectionView';
+import { parseWindowsPanelSections } from '../modules/windowsPanel/detection';
 import type {
     WindowsDatabaseAction,
     WindowsDatabaseColumn,
@@ -74,7 +76,19 @@ interface WindowsCollectionArtifact {
     format: string;
 }
 
+interface WindowsLogPageInfo {
+    page: number;
+    pageSize: number;
+    totalCount: number | null;
+}
+
+interface ModuleLoadOptions {
+    windowsLogPage?: number;
+    windowsLogPageSize?: number;
+}
+
 const WINDOWS_EVENT_LOG_PREVIEW_LIMIT = 500;
+const WINDOWS_EVENT_LOG_DEFAULT_PAGE_SIZE = 50;
 
 const windowsEventLogModuleNames: Record<string, string> = {
     win_security_log: 'Security',
@@ -107,21 +121,36 @@ const normalizeCell = (value: unknown): string => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === 'object' && !Array.isArray(value);
 
-const readArtifactPreview = (value: unknown): { rows: any[]; artifact: WindowsCollectionArtifact | null; previewLimit: number | null } => {
+const readArtifactPreview = (value: unknown): {
+    rows: any[];
+    artifact: WindowsCollectionArtifact | null;
+    previewLimit: number | null;
+    pageInfo: WindowsLogPageInfo | null;
+} => {
     if (isRecord(value) && Array.isArray(value.preview)) {
         const artifactPath = value.artifactPath ?? value.ArtifactPath;
         const previewLimit = Number(value.previewLimit ?? value.PreviewLimit);
+        const page = Number(value.page ?? value.Page);
+        const pageSize = Number(value.pageSize ?? value.PageSize);
+        const totalCount = Number(value.totalCount ?? value.TotalCount);
         const rows = value.preview;
+        const pageInfo = Number.isFinite(page) && Number.isFinite(pageSize)
+            ? {
+                page,
+                pageSize,
+                totalCount: Number.isFinite(totalCount) ? totalCount : null,
+            }
+            : null;
 
         if (!artifactPath) {
             return {
                 rows,
                 artifact: null,
                 previewLimit: Number.isFinite(previewLimit) ? previewLimit : null,
+                pageInfo,
             };
         }
 
-        const totalCount = Number(value.totalCount ?? value.TotalCount ?? rows.length);
         return {
             rows,
             artifact: {
@@ -131,11 +160,12 @@ const readArtifactPreview = (value: unknown): { rows: any[]; artifact: WindowsCo
                 format: String(value.format ?? value.Format ?? 'csv'),
             },
             previewLimit: Number.isFinite(previewLimit) ? previewLimit : null,
+            pageInfo,
         };
     }
 
     if (!isRecord(value) || !value.artifactPath) {
-        return { rows: Array.isArray(value) ? value : [value], artifact: null, previewLimit: null };
+        return { rows: Array.isArray(value) ? value : [value], artifact: null, previewLimit: null, pageInfo: null };
     }
 
     const preview = Array.isArray(value.preview) ? value.preview : [];
@@ -149,6 +179,7 @@ const readArtifactPreview = (value: unknown): { rows: any[]; artifact: WindowsCo
             format: String(value.format ?? 'csv'),
         },
         previewLimit: null,
+        pageInfo: null,
     };
 };
 
@@ -1569,12 +1600,25 @@ $rows | ConvertTo-Json -Compress -Depth 5
 
 windowsLocalCommands.browser = `powershell.exe -NoProfile -Command "function Get-BrowserProfiles($browser, $root) { if (-not (Test-Path $root)) { return @() }; @(Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' -or $browser -eq 'Firefox' } | ForEach-Object { $history = if ($browser -eq 'Firefox') { Join-Path $_.FullName 'places.sqlite' } else { Join-Path $_.FullName 'History' }; [pscustomobject]@{ Browser=$browser; Profile=$_.Name; Path=$_.FullName; LastWriteTime=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'); HistoryPath=if (Test-Path $history) { $history } else { '' }; HistoryLastWriteTime=if (Test-Path $history) { (Get-Item $history).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' } } }) }; echo ===CHROME===; @(Get-BrowserProfiles 'Chrome' (Join-Path $env:LOCALAPPDATA 'Google\\Chrome\\User Data')) | ConvertTo-Json -Compress -Depth 4; echo ===EDGE===; @(Get-BrowserProfiles 'Edge' (Join-Path $env:LOCALAPPDATA 'Microsoft\\Edge\\User Data')) | ConvertTo-Json -Compress -Depth 4; echo ===FIREFOX===; @(Get-BrowserProfiles 'Firefox' (Join-Path $env:APPDATA 'Mozilla\\Firefox\\Profiles')) | ConvertTo-Json -Compress -Depth 4"`;
 
-function buildWindowsEventLogCommand(logName: string, startTimeExpression?: string): string {
+function buildWindowsEventLogCommand(
+    logName: string,
+    startTimeExpression?: string,
+    page = 1,
+    pageSize = WINDOWS_EVENT_LOG_DEFAULT_PAGE_SIZE,
+): string {
+    const currentPage = Math.max(1, Math.floor(page));
+    const take = Math.min(500, Math.max(1, Math.floor(pageSize)));
+    const skip = (currentPage - 1) * take;
+    const maxEvents = skip + take;
+    const safeLogName = logName.replace(/'/g, "''");
     const filter = startTimeExpression
-        ? `@{LogName='${logName}'; StartTime=${startTimeExpression}}`
-        : `@{LogName='${logName}'}`;
+        ? `@{LogName='${safeLogName}'; StartTime=${startTimeExpression}}`
+        : `@{LogName='${safeLogName}'}`;
+    const totalExpression = startTimeExpression
+        ? `@(Get-WinEvent -FilterHashtable ${filter} -ErrorAction Stop | Measure-Object).Count`
+        : `(Get-WinEvent -ListLog '${safeLogName}' -ErrorAction Stop).RecordCount`;
 
-    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $rows=@(Get-WinEvent -FilterHashtable ${filter} -MaxEvents ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT} -ErrorAction Stop | ForEach-Object { $msg=($_.Message -replace '[\\r\\n]+', ' '); [pscustomobject]@{ time=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); id=$_.Id; message=$msg } }); [pscustomobject]@{ previewLimit=${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}; isPreview=$true; preview=@($rows); format='json' } | ConvertTo-Json -Compress -Depth 5 } catch { if ($_.Exception.Message -match 'No events were found') { [pscustomobject]@{ previewLimit=${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}; isPreview=$true; preview=@(); format='json' } | ConvertTo-Json -Compress -Depth 5 } else { [pscustomobject]@{ error=$_.Exception.Message } | ConvertTo-Json -Compress -Depth 4 } }"`;
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $skip=${skip}; $take=${take}; try { $totalCount=[int64](${totalExpression}); $rows=@(Get-WinEvent -FilterHashtable ${filter} -MaxEvents ${maxEvents} -ErrorAction Stop | Select-Object -Skip $skip -First $take | ForEach-Object { $msg=($_.Message -replace '[\\r\\n]+', ' '); [pscustomobject]@{ time=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); id=$_.Id; message=$msg } }); [pscustomobject]@{ totalCount=$totalCount; page=${currentPage}; pageSize=${take}; isPaged=$true; preview=@($rows); format='json' } | ConvertTo-Json -Compress -Depth 5 } catch { if ($_.Exception.Message -match 'No events were found') { [pscustomobject]@{ totalCount=0; page=${currentPage}; pageSize=${take}; isPaged=$true; preview=@(); format='json' } | ConvertTo-Json -Compress -Depth 5 } else { [pscustomobject]@{ error=$_.Exception.Message } | ConvertTo-Json -Compress -Depth 4 } }"`;
 }
 
 function buildWindowsEventLogExportCommand(logName: string, startTimeExpression?: string): string {
@@ -1604,10 +1648,18 @@ windowsLocalCommands.file_scan = `powershell.exe -NoProfile -ExecutionPolicy Byp
 windowsLocalCommands.suspicious_files = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$winTemp = if ($env:WINDIR) { Join-Path $env:WINDIR 'Temp' } else { 'C:\\Windows\\Temp' }; $tempRoots = @($env:TEMP, $winTemp) | Where-Object { $_ -and (Test-Path $_) }; $userDownloads = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'Downloads' } else { $null }; $roots = @($tempRoots, $userDownloads, $env:APPDATA, $env:LOCALAPPDATA) | Where-Object { $_ -and (Test-Path $_) }; Write-Output '===RECENT_TEMP==='; $recentTemp = @(); foreach ($root in $tempRoots) { $recentTemp += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-1) }) }; $recentTemp | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===TEMP_EXE==='; $tempExe = @(); foreach ($root in $tempRoots) { $tempExe += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $tempExe | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===HIDDEN_EXE==='; $hiddenExe = @(); foreach ($root in $roots) { $hiddenExe += @(Get-ChildItem -LiteralPath $root -File -Force -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Attributes -band [IO.FileAttributes]::Hidden -and $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $hiddenExe | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===RECENT_MODIFIED==='; $recentExec = @(); foreach ($root in $roots) { $recentExec += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $recentExec | Sort-Object LastWriteTime -Descending | Select-Object -First 120 -ExpandProperty FullName"`;
 windowsLocalCommands.system_info = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$os = Get-CimInstance Win32_OperatingSystem; $cs = Get-CimInstance Win32_ComputerSystem; $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1; $ips = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254*' } | Select-Object -ExpandProperty IPAddress); [pscustomobject]@{ os_name=$os.Caption; os_version=$os.Version; hostname=$env:COMPUTERNAME; kernel_version=$os.BuildNumber; architecture=$os.OSArchitecture; cpu_cores=[int]$cs.NumberOfLogicalProcessors; cpu_model=$cpu.Name; total_memory_gb=[math]::Round($cs.TotalPhysicalMemory / 1GB, 2); used_memory_gb=[math]::Round(($cs.TotalPhysicalMemory - ($os.FreePhysicalMemory * 1KB)) / 1GB, 2); cpu_usage=0; uptime_seconds=[int]((Get-Date) - $os.LastBootUpTime).TotalSeconds; boot_time_str=$os.LastBootUpTime.ToString('yyyy-MM-dd HH:mm:ss'); timezone=(Get-TimeZone).Id; current_time=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss'); ip_addresses=$ips } | ConvertTo-Json -Compress -Depth 4"`;
 
-export function getWindowsLocalCommand(moduleKey: string, webroot = ''): string | undefined {
+export function getWindowsLocalCommand(
+    moduleKey: string,
+    webroot = '',
+    options: { page?: number; pageSize?: number; startTimeExpression?: string } = {},
+): string | undefined {
     const currentKey = moduleKey === 'software' ? 'installed_software' : moduleKey;
     if (currentKey === 'webshell_scan') {
         return buildWindowsWebshellScanCommand(webroot);
+    }
+    const logName = windowsEventLogModuleNames[currentKey];
+    if (logName) {
+        return buildWindowsEventLogCommand(logName, options.startTimeExpression, options.page, options.pageSize);
     }
     return windowsLocalCommands[currentKey];
 }
@@ -1731,6 +1783,7 @@ export default function ModuleDetail({
     const [collectionDiagnostic, setCollectionDiagnostic] = useState<CollectionDiagnostic | null>(null);
     const [collectionArtifact, setCollectionArtifact] = useState<WindowsCollectionArtifact | null>(null);
     const [collectionPreviewLimit, setCollectionPreviewLimit] = useState<number | null>(null);
+    const [windowsLogPageInfo, setWindowsLogPageInfo] = useState<WindowsLogPageInfo | null>(null);
     const [fullCollectionLoading, setFullCollectionLoading] = useState(false);
     const [dbSelectedDb, setDbSelectedDb] = useState<string>('');
     const [dbSelectedTable, setDbSelectedTable] = useState<string>('');
@@ -1954,7 +2007,7 @@ export default function ModuleDetail({
         }
     };
 
-    const loadData = async () => {
+    const loadData = async (options: ModuleLoadOptions = {}) => {
         // 文件管理和终端模块有自己的加载逻辑
         if (moduleKey === 'file_manager' || moduleKey === 'terminal') {
             setLoading(false);
@@ -1967,6 +2020,7 @@ export default function ModuleDetail({
         setCollectionDiagnostic(null);
         setCollectionArtifact(null);
         setCollectionPreviewLimit(null);
+        setWindowsLogPageInfo(null);
 
         try {
             if (mode === 'local' && moduleKey === 'system_info') {
@@ -1976,7 +2030,7 @@ export default function ModuleDetail({
                 await loadRemoteSystemInfo();
             } else {
                 // 通用数据加载（本地/远程均使用通用命令）
-                await loadRemoteData();
+                await loadRemoteData(options);
             }
         } catch (error) {
             console.error('加载数据失败:', error);
@@ -2135,7 +2189,7 @@ export default function ModuleDetail({
         }
     };
 
-    const loadRemoteData = async () => {
+    const loadRemoteData = async (options: ModuleLoadOptions = {}) => {
         let currentKey = moduleKey;
         // Alias for Windows software compatibility
         if (currentKey === 'software') currentKey = 'installed_software';
@@ -2144,7 +2198,12 @@ export default function ModuleDetail({
 
         // 如果是 Windows 本地模式，优先使用 Windows 专用命令
         if (mode === 'local' && osType === 'Windows') {
-            const windowsCommand = getWindowsLocalCommand(currentKey, scanDirs.webroot);
+            const windowsCommand = getWindowsLocalCommand(currentKey, scanDirs.webroot, {
+                page: options.windowsLogPage ?? 1,
+                pageSize: options.windowsLogPageSize
+                    ?? windowsLogPageInfo?.pageSize
+                    ?? WINDOWS_EVENT_LOG_DEFAULT_PAGE_SIZE,
+            });
             if (windowsCommand) {
                 command = windowsCommand;
             }
@@ -2209,7 +2268,12 @@ export default function ModuleDetail({
             } else if (['win_security_log', 'win_system_log', 'win_app_log', 'win_powershell_log'].includes(keyToCheck)) {
                 const winSince = windowsLogTimeRangeStartExpressions[timeRange];
                 const logName = windowsEventLogModuleNames[keyToCheck];
-                command = buildWindowsEventLogCommand(logName, winSince);
+                command = buildWindowsEventLogCommand(
+                    logName,
+                    winSince,
+                    options.windowsLogPage ?? 1,
+                    options.windowsLogPageSize ?? windowsLogPageInfo?.pageSize ?? WINDOWS_EVENT_LOG_DEFAULT_PAGE_SIZE,
+                );
             }
         }
 
@@ -5000,11 +5064,29 @@ export default function ModuleDetail({
                 };
 
                 // 检测是 Linux 宝塔面板还是 Windows 面板
-                const isWindowsPanel = output.includes('===PHPSTUDY===') || 
-                                      output.includes('===XAMPP===') || 
-                                      output.includes('===WAMPSERVER===') || 
+                const isWindowsPanel = output.includes('===PHPSTUDY===') ||
+                                      output.includes('===XAMPP===') ||
+                                      output.includes('===WAMPSERVER===') ||
                                       output.includes('===BAOTA_WIN===') ||
-                                      output.includes('===IIS===');
+                                      output.includes('===IIS===') ||
+                                      output.includes('===PANELS===') ||
+                                      output.includes('===IIS_SITES===') ||
+                                      output.includes('===SERVICES===') ||
+                                      output.includes('===LOGS===') ||
+                                      output.includes('===DIAGNOSTICS===');
+
+                if (isWindowsPanel && isWindowsLocalMode) {
+                    const windowsPanelData = parseWindowsPanelSections(output);
+                    setRawOutput(JSON.stringify(windowsPanelData));
+                    setTableData([
+                        ...windowsPanelData.detectedInstalls,
+                        ...windowsPanelData.sites,
+                        ...windowsPanelData.iisSites,
+                        ...windowsPanelData.services,
+                        ...windowsPanelData.logs,
+                    ]);
+                    break;
+                }
 
                 if (isWindowsPanel) {
                     // Windows 面板检测逻辑
@@ -5576,9 +5658,10 @@ export default function ModuleDetail({
                 const jsonData = tryParseJsonArray(output);
                 if (jsonData) {
                     const parsedValue = JSON.parse(output.trim());
-                    const { rows, artifact, previewLimit } = readArtifactPreview(parsedValue);
+                    const { rows, artifact, previewLimit, pageInfo } = readArtifactPreview(parsedValue);
                     setCollectionArtifact(artifact);
                     setCollectionPreviewLimit(previewLimit);
+                    setWindowsLogPageInfo(pageInfo);
                     const errorItem = rows.find((item: any) =>
                         item && typeof item === 'object' && (item.error || item.Error || item.EventId === 'error')
                     );
@@ -5630,9 +5713,10 @@ export default function ModuleDetail({
                     }
                     // 解析 JSON
                     const parsed = JSON.parse(jsonStr);
-                    const { rows: arr, artifact, previewLimit } = readArtifactPreview(parsed);
+                    const { rows: arr, artifact, previewLimit, pageInfo } = readArtifactPreview(parsed);
                     setCollectionArtifact(artifact);
                     setCollectionPreviewLimit(previewLimit);
+                    setWindowsLogPageInfo(pageInfo);
                     const errorItem = arr.find((item: any) => item && typeof item === 'object' && (item.error || item.Error));
                     if (errorItem) {
                         setCollectionFailureDiagnostic(
@@ -10722,6 +10806,17 @@ export default function ModuleDetail({
             : <Card className={cardClass}><Text type="secondary">暂无数据</Text></Card>
     );
 
+    const renderWindowsPanelDetection = () => {
+        let panelData: unknown = null;
+        try {
+            panelData = JSON.parse(rawOutput || '{}');
+        } catch {
+            panelData = null;
+        }
+
+        return <WindowsPanelDetectionView data={panelData} isDarkMode={isDarkMode} />;
+    };
+
     const renderContent = () => {
         if (moduleKey === 'terminal') return renderTerminal();
         if (moduleKey === 'file_manager') return renderFileManager();
@@ -10734,6 +10829,7 @@ export default function ModuleDetail({
         if (collectionDiagnostic) return renderCollectionDiagnostic();
         if (moduleKey === 'suspicious_files') return <>{renderSuspiciousFiles()}</>;
         if (moduleKey === 'webshell_scan') return <>{renderWebshellScan()}</>;
+        if (moduleKey === 'panel' && isWindowsLocalMode) return renderWindowsPanelDetection();
         if (moduleKey === 'panel') return <>{renderBaoTaPanel()}</>;
         if (moduleKey === 'database') {
             if (osType === 'Windows' || rawOutput.includes('DB_SERVICES')) {

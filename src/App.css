@@ -2626,6 +2626,130 @@ body {
   box-shadow: none !important;
 }
 
+.windows-panel-detection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  color: #111827;
+}
+
+.windows-panel-detection-dark {
+  color: #d7dee8;
+}
+
+.windows-panel-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.windows-panel-summary-item {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.windows-panel-detection-dark .windows-panel-summary-item {
+  border-color: #303b4a;
+  background: #161f2a;
+}
+
+.windows-panel-summary-item span {
+  color: #5b677a;
+  font-size: 12px;
+}
+
+.windows-panel-detection-dark .windows-panel-summary-item span {
+  color: #98a6ba;
+}
+
+.windows-panel-summary-item strong {
+  color: #0f766e;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.windows-panel-empty,
+.windows-panel-table-shell {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.windows-panel-detection-dark .windows-panel-empty,
+.windows-panel-detection-dark .windows-panel-table-shell {
+  border-color: #303b4a;
+  background: #161f2a;
+}
+
+.windows-panel-empty {
+  padding: 18px;
+}
+
+.windows-panel-empty-diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.windows-panel-table-shell {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.windows-panel-table-shell .ant-tabs {
+  padding: 0 12px 12px;
+}
+
+.windows-panel-table-shell .ant-tabs-nav {
+  margin-bottom: 10px;
+}
+
+.windows-panel-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.windows-panel-site-name {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.35;
+}
+
+.windows-panel-path {
+  max-width: 520px;
+  display: inline-block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.windows-panel-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (max-width: 900px) {
+  .windows-panel-summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .windows-database-modal .ant-modal-content {
   max-height: calc(100vh - 64px);
 }

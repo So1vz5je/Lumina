@@ -1088,6 +1088,52 @@ describe('ModuleDetail Windows security module rendering', () => {
     });
   });
 
+  it('renders the refactored Windows panel detection workspace with installs, sites, services, logs, and diagnostics', async () => {
+    renderLocalWindowsModule(
+      'panel',
+      [
+        '===PANELS===',
+        JSON.stringify([{ PanelType: 'phpstudy', Name: 'PhpStudy Pro', Path: 'C:\\phpstudy_pro', SiteRoot: 'C:\\phpstudy_pro\\WWW', Detected: true, SiteCount: 1, ServiceState: 'Running', Evidence: 'path; service', Notes: 'installed' }]),
+        '===IIS_SITES===',
+        JSON.stringify([{ Name: 'Default Web Site', PhysicalPath: 'C:\\inetpub\\wwwroot', State: 'Started', Bindings: '*:80:' }]),
+        '===SERVICES===',
+        JSON.stringify([{ Source: 'phpstudy', Name: 'Apache2.4', DisplayName: 'Apache2.4', State: 'Running', StartMode: 'Auto', PathName: 'C:\\phpstudy_pro\\Extensions\\Apache\\bin\\httpd.exe', ProcessId: 1234 }]),
+        '===LOGS===',
+        JSON.stringify([{ Source: 'phpstudy', Path: 'C:\\phpstudy_pro\\COM\\log\\phpstudy.log', Length: 2048, LastWriteTime: '2026-06-25T20:00:00', Note: 'phpStudy log' }]),
+        '===DIAGNOSTICS===',
+        JSON.stringify(['IIS WebAdministration module is unavailable']),
+      ].join('\n'),
+    );
+
+    expect(await screen.findByText('PhpStudy Pro')).toBeInTheDocument();
+    expect(screen.getByText('C:\\phpstudy_pro')).toBeInTheDocument();
+    expect(screen.getByText('Default Web Site')).toBeInTheDocument();
+    expect(screen.getAllByText('Apache2.4').length).toBeGreaterThan(0);
+    expect(screen.getByText('C:\\phpstudy_pro\\COM\\log\\phpstudy.log')).toBeInTheDocument();
+    expect(screen.getByText('IIS WebAdministration module is unavailable')).toBeInTheDocument();
+  });
+
+  it('renders a deliberate Windows panel empty state when no panel is detected', async () => {
+    renderLocalWindowsModule(
+      'panel',
+      [
+        '===PANELS===',
+        JSON.stringify([{ PanelType: 'xampp', Name: 'XAMPP', Path: 'C:\\xampp', SiteRoot: 'C:\\xampp\\htdocs', Detected: false, SiteCount: 0, Notes: 'not found' }]),
+        '===IIS_SITES===',
+        '[]',
+        '===SERVICES===',
+        '[]',
+        '===LOGS===',
+        '[]',
+        '===DIAGNOSTICS===',
+        JSON.stringify(['Checked BaoTa Windows, phpStudy, XAMPP, WampServer, and IIS']),
+      ].join('\n'),
+    );
+
+    expect(await screen.findByText('未发现常见 Windows Web 面板')).toBeInTheDocument();
+    expect(screen.getAllByText(/BaoTa Windows/).length).toBeGreaterThan(0);
+  });
+
   it('runs a bounded Windows webshell scan and renders Windows path hits', async () => {
     invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
       if (command === 'execute_local_command') {
