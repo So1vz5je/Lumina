@@ -1,4 +1,4 @@
-use crate::{run_local_process, ssh::CommandResult};
+use crate::{run_local_process_with_env, ssh::CommandResult};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,6 +71,7 @@ pub struct WindowsDatabaseMutationRequest {
 struct DatabaseCommandPlan {
     program: String,
     args: Vec<String>,
+    env: Vec<(String, String)>,
 }
 
 pub fn ensure_readonly_sql(engine: DatabaseEngine, sql: &str) -> Result<(), String> {
@@ -157,7 +158,14 @@ pub fn build_engine_command_with_schema(
     row_limit: u32,
 ) -> Result<String, String> {
     let plan = build_engine_command_plan_with_schema(
-        engine, action, instance_id, database, schema, table, sql, row_limit,
+        engine,
+        action,
+        instance_id,
+        database,
+        schema,
+        table,
+        sql,
+        row_limit,
     )?;
     Ok(render_command_plan(&plan))
 }
@@ -299,18 +307,17 @@ fn build_engine_command_plan_with_schema(
         DatabaseEngine::Mysql => DatabaseCommandPlan {
             program: "mysql".to_string(),
             args: build_mysql_args(instance_target, database, &query),
+            env: Vec::new(),
         },
         DatabaseEngine::Sqlserver => DatabaseCommandPlan {
             program: "sqlcmd".to_string(),
-            args: build_sqlserver_args(
-                &sqlserver_server_arg(instance_target),
-                database,
-                &query,
-            ),
+            args: build_sqlserver_args(&sqlserver_server_arg(instance_target), database, &query),
+            env: Vec::new(),
         },
         DatabaseEngine::Postgresql => DatabaseCommandPlan {
             program: "psql".to_string(),
             args: build_postgresql_args(instance_target, database, &query),
+            env: vec![("PGCLIENTENCODING".to_string(), "UTF8".to_string())],
         },
     })
 }
@@ -342,7 +349,7 @@ pub async fn windows_database_readonly(request: WindowsDatabaseRequest) -> Comma
         Err(err) => return command_error(&err),
     };
 
-    run_local_process(&plan.program, &plan.args)
+    run_local_process_with_env(&plan.program, &plan.args, &plan.env)
 }
 
 #[tauri::command]
@@ -352,7 +359,7 @@ pub async fn windows_database_mutation(request: WindowsDatabaseMutationRequest) 
         Err(err) => return command_error(&err),
     };
 
-    run_local_process(&plan.program, &plan.args)
+    run_local_process_with_env(&plan.program, &plan.args, &plan.env)
 }
 
 fn command_error(message: &str) -> CommandResult {
@@ -369,6 +376,7 @@ fn build_mysql_args(instance_target: &str, database: &str, query: &str) -> Vec<S
         "--batch".to_string(),
         "--raw".to_string(),
         "--skip-column-names".to_string(),
+        "--default-character-set=utf8mb4".to_string(),
     ];
     let (host, port) = parse_network_instance_target(instance_target);
     args.push("--host".to_string());
@@ -393,6 +401,8 @@ fn build_sqlserver_args(server: &str, database: &str, query: &str) -> Vec<String
         "-W".to_string(),
         "-s".to_string(),
         ",".to_string(),
+        "-f".to_string(),
+        "65001".to_string(),
     ];
     if !database.is_empty() {
         args.push("-d".to_string());
@@ -525,7 +535,9 @@ fn validate_identifier(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn values_object(value: &Option<serde_json::Value>) -> Result<Vec<(String, serde_json::Value)>, String> {
+fn values_object(
+    value: &Option<serde_json::Value>,
+) -> Result<Vec<(String, serde_json::Value)>, String> {
     let Some(serde_json::Value::Object(values)) = value else {
         return Err("values are required".to_string());
     };
@@ -741,6 +753,7 @@ fn build_mutation_command_plan(
         DatabaseEngine::Mysql => DatabaseCommandPlan {
             program: "mysql".to_string(),
             args: build_mysql_args(instance_target, &request.database, &sql),
+            env: Vec::new(),
         },
         DatabaseEngine::Sqlserver => DatabaseCommandPlan {
             program: "sqlcmd".to_string(),
@@ -749,10 +762,12 @@ fn build_mutation_command_plan(
                 &request.database,
                 &sql,
             ),
+            env: Vec::new(),
         },
         DatabaseEngine::Postgresql => DatabaseCommandPlan {
             program: "psql".to_string(),
             args: build_postgresql_args(instance_target, &request.database, &sql),
+            env: vec![("PGCLIENTENCODING".to_string(), "UTF8".to_string())],
         },
     })
 }
@@ -970,6 +985,61 @@ mod tests {
         expect_args_include(&plan.args, "127.0.0.1");
         expect_args_include(&plan.args, "--port");
         expect_args_include(&plan.args, "3306");
+    }
+
+    #[test]
+    fn configures_mysql_client_for_utf8mb4_output() {
+        let plan = build_engine_command_plan_with_schema(
+            DatabaseEngine::Mysql,
+            DatabaseAction::PreviewTable,
+            "mysql:127.0.0.1:3306",
+            Some("appdb"),
+            None,
+            Some("users"),
+            None,
+            10,
+        )
+        .unwrap();
+
+        expect_args_include(&plan.args, "--default-character-set=utf8mb4");
+    }
+
+    #[test]
+    fn configures_sqlcmd_for_utf8_output() {
+        let plan = build_engine_command_plan_with_schema(
+            DatabaseEngine::Sqlserver,
+            DatabaseAction::PreviewTable,
+            "sqlserver:MSSQLSERVER",
+            Some("appdb"),
+            Some("dbo"),
+            Some("users"),
+            None,
+            10,
+        )
+        .unwrap();
+
+        expect_args_include(&plan.args, "-f");
+        expect_args_include(&plan.args, "65001");
+    }
+
+    #[test]
+    fn configures_postgresql_client_for_utf8_output() {
+        let plan = build_engine_command_plan_with_schema(
+            DatabaseEngine::Postgresql,
+            DatabaseAction::PreviewTable,
+            "postgresql:127.0.0.1:5432",
+            Some("appdb"),
+            Some("public"),
+            Some("users"),
+            None,
+            10,
+        )
+        .unwrap();
+
+        assert!(plan
+            .env
+            .iter()
+            .any(|(key, value)| key == "PGCLIENTENCODING" && value == "UTF8"));
     }
 
     #[test]

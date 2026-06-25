@@ -625,18 +625,33 @@ fn run_local_command(command: &str) -> CommandResult {
 }
 
 fn run_local_process(program: &str, args: &[String]) -> CommandResult {
+    run_local_process_with_env(program, args, &[])
+}
+
+fn run_local_process_with_env(
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+) -> CommandResult {
     #[cfg(target_os = "windows")]
     let output = {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        std::process::Command::new(program)
+        let mut command = std::process::Command::new(program);
+        command
             .args(args)
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
+            .envs(env.iter().map(|(key, value)| (key, value)));
+        command.creation_flags(CREATE_NO_WINDOW).output()
     };
 
     #[cfg(not(target_os = "windows"))]
-    let output = std::process::Command::new(program).args(args).output();
+    let output = {
+        let mut command = std::process::Command::new(program);
+        command
+            .args(args)
+            .envs(env.iter().map(|(key, value)| (key, value)));
+        command.output()
+    };
 
     match output {
         Ok(out) => CommandResult {
