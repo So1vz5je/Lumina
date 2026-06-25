@@ -209,6 +209,8 @@ const getWindowsDatabaseOutputLines = (stdout: string): string[] =>
         .filter(Boolean)
         .filter(line => !/^[-\s]+$/.test(line))
         .filter(line => !/^\(\d+\s+rows?\s+affected\)$/i.test(line))
+        .filter(line => !/^\(\d+\s+.*受影响.*\)$/i.test(line))
+        .filter(line => !/^\(\d+\s+.*\uFFFD.*\)$/i.test(line))
         .filter(line => !/^rows?\s+affected/i.test(line));
 
 const coerceStringArray = (value: unknown): string[] => {
@@ -3828,6 +3830,23 @@ export default function ModuleDetail({
                         '9300': 'Elasticsearch',
                     };
 
+                    const isSqlServerEngineService = (item: any): boolean => {
+                        const name = String(item.Name || '').trim().toLowerCase();
+                        const displayName = String(item.DisplayName || '').trim();
+                        const pathName = String(item.PathName || '').trim().toLowerCase();
+                        return name === 'mssqlserver'
+                            || name.startsWith('mssql$')
+                            || /^sql server \([^)]+\)$/i.test(displayName)
+                            || /\\sqlservr\.exe"?$/i.test(pathName);
+                    };
+
+                    const addUnique = (values: string[], value: unknown) => {
+                        const text = String(value || '').trim();
+                        if (text && !values.includes(text)) {
+                            values.push(text);
+                        }
+                    };
+
                     const statusTag = (value: unknown) => {
                         const raw = String(value || '').trim();
                         const lower = raw.toLowerCase();
@@ -3843,19 +3862,64 @@ export default function ModuleDetail({
                         return { label: raw || '-', color: 'blue' };
                     };
 
+                    const portRowsByIdentity = new Map<string, any>();
+                    const upsertDatabasePortRow = (item: any) => {
+                        const port = String(item.LocalPort || '').trim();
+                        const status = statusTag(item.State);
+                        const dbType = typeByPort[port] || inferDatabaseType(item.ProcessName, item.ProcessPath);
+                        const processName = String(item.ProcessName || '').trim();
+                        const pid = String(item.OwningProcess || '-').trim();
+                        const processPath = String(item.ProcessPath || '-').trim();
+                        const instanceTarget = dbType === 'SQL Server' ? 'MSSQLSERVER' : '';
+                        const mergeKey = [dbType, processName, pid, processPath, instanceTarget].join('|');
+                        const row = portRowsByIdentity.get(mergeKey) || {
+                            key: dbs.length,
+                            source: '端口',
+                            name: processName || `${typeByPort[port] || 'Database'}:${port || '-'}`,
+                            type: dbType,
+                            instanceTarget,
+                            localAddress: '',
+                            host: item.LocalAddress || 'localhost',
+                            credentialMode: 'detected',
+                            status: status.label,
+                            statusColor: status.color,
+                            version: '-',
+                            port: '-',
+                            pid,
+                            path: processPath,
+                            detail: '-',
+                            _ports: [] as string[],
+                            _localAddresses: [] as string[],
+                        };
+
+                        addUnique(row._ports, port);
+                        addUnique(row._localAddresses, item.LocalAddress);
+                        row.port = row._ports.join(', ') || '-';
+                        row.localAddress = row._localAddresses.join(', ');
+                        row.version = row.localAddress || '-';
+                        row.detail = row.localAddress ? `监听地址：${row.localAddress}` : '-';
+
+                        if (!portRowsByIdentity.has(mergeKey)) {
+                            portRowsByIdentity.set(mergeKey, row);
+                            dbs.push(row);
+                        }
+                    };
+
                     for (let i = 1; i < sections.length; i += 2) {
                         if (sections[i] === 'DB_SERVICES') {
                             parseJsonRows(sections[i + 1] || '').forEach((item: any) => {
                                 const status = statusTag(item.State || item.Status);
+                                const dbType = inferDatabaseType(item.Name, item.DisplayName, item.PathName);
+                                const canOpenDetails = dbType !== 'SQL Server' || isSqlServerEngineService(item);
                                 dbs.push({
                                     key: dbs.length,
                                     source: '服务',
                                     name: item.DisplayName || item.Name || '-',
-                                    type: inferDatabaseType(item.Name, item.DisplayName, item.PathName),
+                                    type: dbType,
                                     rawServiceName: item.Name || '',
-                                    instanceTarget: item.Name || '',
+                                    instanceTarget: canOpenDetails ? item.Name || '' : '',
                                     host: 'localhost',
-                                    credentialMode: 'detected',
+                                    credentialMode: canOpenDetails ? 'detected' : 'unavailable',
                                     status: status.label,
                                     statusColor: status.color,
                                     version: item.StartMode ? `启动类型：${item.StartMode}` : '-',
@@ -3867,26 +3931,7 @@ export default function ModuleDetail({
                             });
                         } else if (sections[i] === 'DB_PORTS') {
                             parseJsonRows(sections[i + 1] || '').forEach((item: any) => {
-                                const port = String(item.LocalPort || '');
-                                const status = statusTag(item.State);
-                                const dbType = typeByPort[port] || inferDatabaseType(item.ProcessName, item.ProcessPath);
-                                dbs.push({
-                                    key: dbs.length,
-                                    source: '端口',
-                                    name: item.ProcessName || `${typeByPort[port] || 'Database'}:${port || '-'}`,
-                                    type: dbType,
-                                    instanceTarget: dbType === 'SQL Server' ? 'MSSQLSERVER' : '',
-                                    localAddress: item.LocalAddress || '',
-                                    host: item.LocalAddress || 'localhost',
-                                    credentialMode: 'detected',
-                                    status: status.label,
-                                    statusColor: status.color,
-                                    version: item.LocalAddress || '-',
-                                    port: port || '-',
-                                    pid: item.OwningProcess || '-',
-                                    path: item.ProcessPath || '-',
-                                    detail: item.LocalAddress ? `监听地址：${item.LocalAddress}` : '-',
-                                });
+                                upsertDatabasePortRow(item);
                             });
                         } else if (sections[i] === 'DB_PROCESSES') {
                             parseJsonRows(sections[i + 1] || '').forEach((item: any) => {
@@ -3932,7 +3977,7 @@ export default function ModuleDetail({
                     if (dbs.length === 0) {
                         setNoRecordsDiagnostic('database', lines, 'Windows 数据库检测命令已执行，但没有发现常见数据库服务、监听端口、进程或安装痕迹。');
                     } else {
-                        setTableData(dbs);
+                        setTableData(dbs.map(({ _ports, _localAddresses, ...row }) => row));
                     }
                     break;
                 }
@@ -7834,17 +7879,20 @@ export default function ModuleDetail({
                     key: 'windowsDatabaseAction',
                     width: 110,
                     fixed: 'right' as const,
-                    render: (_: unknown, record: unknown) => buildWindowsDatabaseInstance(record) ? (
-                        <Button
-                            size="small"
-                            icon={<EyeOutlined />}
-                            aria-label={WINDOWS_DATABASE_DETAIL_LABEL}
-                            title={WINDOWS_DATABASE_DETAIL_LABEL}
-                            onClick={() => handleOpenWindowsDatabaseWorkbench(record)}
-                        >
-                            {WINDOWS_DATABASE_DETAIL_LABEL}
-                        </Button>
-                    ) : null,
+                    render: (_: unknown, record: unknown) => {
+                        const instance = buildWindowsDatabaseInstance(record);
+                        return instance && instance.credentialMode !== 'unavailable' ? (
+                            <Button
+                                size="small"
+                                icon={<EyeOutlined />}
+                                aria-label={WINDOWS_DATABASE_DETAIL_LABEL}
+                                title={WINDOWS_DATABASE_DETAIL_LABEL}
+                                onClick={() => handleOpenWindowsDatabaseWorkbench(record)}
+                            >
+                                {WINDOWS_DATABASE_DETAIL_LABEL}
+                            </Button>
+                        ) : null;
+                    },
                 },
             ]
             : baseColumns;
@@ -10871,9 +10919,16 @@ export default function ModuleDetail({
                 open={windowsDatabaseWorkbenchOpen}
                 onCancel={() => setWindowsDatabaseWorkbenchOpen(false)}
                 footer={null}
-                width={1100}
+                width="min(1280px, calc(100vw - 48px))"
+                className="windows-database-modal"
                 destroyOnHidden
-                styles={{ body: { padding: 0 } }}
+                styles={{
+                    body: {
+                        height: 'min(760px, calc(100vh - 140px))',
+                        overflow: 'hidden',
+                        padding: 0,
+                    },
+                }}
             >
                 {selectedWindowsDatabaseInstance ? (
                     <WindowsDatabaseWorkbench

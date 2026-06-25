@@ -22,7 +22,6 @@ const { Text, Title } = Typography;
 const { TextArea } = Input;
 
 const NAV_WIDTH = 280;
-const RESULT_PANEL_HEIGHT = 420;
 const TABLE_SCROLL_HEIGHT = 280;
 const DEFAULT_READONLY_ROW_LIMIT = 50;
 const MAX_READONLY_ROW_LIMIT = 100;
@@ -663,7 +662,7 @@ export function WindowsDatabaseWorkbench({
   const previewTableColumns = [...previewColumns, ...previewActionColumns];
 
   return (
-    <div style={styles.root}>
+    <div className="windows-database-workbench" data-testid="windows-database-workbench" style={styles.root}>
       <div style={styles.header}>
         <div style={styles.headerRow}>
           <Title level={5} style={{ margin: 0 }}>
@@ -682,13 +681,13 @@ export function WindowsDatabaseWorkbench({
       </div>
 
       <div style={styles.workspace}>
-        <div style={styles.navRail}>
+        <div data-testid="windows-database-nav" style={styles.navRail}>
           <div style={styles.navSection}>
             <div style={styles.sectionHeader}>
               <Text strong>数据库</Text>
               <Text type="secondary">{databases.length}</Text>
             </div>
-            <div style={styles.listViewport}>
+            <div data-testid="windows-database-db-list" style={styles.listViewport}>
               {databases.length === 0 ? (
                 renderListState(databaseLoading, databaseError, '未返回数据库')
               ) : (
@@ -696,6 +695,7 @@ export function WindowsDatabaseWorkbench({
                   {databases.map((database) => (
                     <div key={database} style={styles.listItem}>
                       <button
+                        className="windows-database-nav-button"
                         type="button"
                         onClick={() => void handleDatabaseSelect(database)}
                         style={{
@@ -717,7 +717,7 @@ export function WindowsDatabaseWorkbench({
               <Text strong>表</Text>
               <Text type="secondary">{tables.length}</Text>
             </div>
-            <div style={styles.listViewport}>
+            <div data-testid="windows-database-table-list" style={styles.listViewport}>
               {tables.length === 0 ? (
                 renderListState(
                   tableLoading,
@@ -734,6 +734,7 @@ export function WindowsDatabaseWorkbench({
                     return (
                       <div key={tableKey} style={styles.listItem}>
                         <button
+                          className="windows-database-nav-button"
                           type="button"
                           onClick={() => void handleTableSelect(table)}
                           style={{
@@ -760,9 +761,11 @@ export function WindowsDatabaseWorkbench({
 
         <div style={styles.resultPane}>
           <Tabs
+            className="windows-database-tabs"
             activeKey={activeTab}
             onChange={setActiveTab}
             size="small"
+            style={styles.tabs}
             items={[
               {
                 key: 'structure',
@@ -956,7 +959,9 @@ const styles: Record<string, CSSProperties> = {
     border: '1px solid #d9d9d9',
     borderRadius: 8,
     background: '#fff',
-    minHeight: 560,
+    height: '100%',
+    minHeight: 0,
+    overflow: 'hidden',
   },
   header: {
     padding: '12px 16px',
@@ -964,6 +969,7 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
+    flexShrink: 0,
   },
   headerRow: {
     display: 'flex',
@@ -981,6 +987,7 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     minHeight: 0,
     flex: 1,
+    overflow: 'hidden',
   },
   navRail: {
     width: NAV_WIDTH,
@@ -990,13 +997,16 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     minHeight: 0,
+    height: '100%',
+    overflow: 'hidden',
   },
   navSection: {
     display: 'flex',
     flexDirection: 'column',
     minHeight: 0,
-    flex: 1,
+    flex: '1 1 0',
     borderBottom: '1px solid #f0f0f0',
+    overflow: 'hidden',
   },
   sectionHeader: {
     padding: '10px 12px',
@@ -1006,7 +1016,10 @@ const styles: Record<string, CSSProperties> = {
     borderBottom: '1px solid #f5f5f5',
   },
   listViewport: {
-    overflow: 'auto',
+    flex: '1 1 0',
+    minHeight: 0,
+    overflowX: 'hidden',
+    overflowY: 'auto',
     padding: 8,
   },
   listItem: {
@@ -1029,10 +1042,12 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: 'space-between',
     gap: 8,
     cursor: 'pointer',
+    minWidth: 0,
+    outline: 'none',
   },
   navButtonActive: {
     background: '#e6f4ff',
-    borderColor: '#91caff',
+    borderColor: 'transparent',
   },
   tableName: {
     overflow: 'hidden',
@@ -1046,13 +1061,24 @@ const styles: Record<string, CSSProperties> = {
   resultPane: {
     flex: 1,
     minWidth: 0,
+    minHeight: 0,
     padding: '12px 16px',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+  tabs: {
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
   },
   tabPane: {
-    height: RESULT_PANEL_HEIGHT,
+    height: '100%',
+    minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
     gap: 12,
+    overflow: 'hidden',
   },
   tabSummary: {
     minHeight: 22,

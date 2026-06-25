@@ -194,6 +194,32 @@ describe('windows database detail contract', () => {
     });
   });
 
+  it('keeps long database table lists inside fixed scroll regions', async () => {
+    const manyTables = Array.from({ length: 60 }, (_, index) => ({
+      schema: 'dbo',
+      name: `table_${String(index + 1).padStart(2, '0')}`,
+    }));
+    const onRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ databases: ['appdb'] })
+      .mockResolvedValueOnce({ tables: manyTables });
+
+    render(<WindowsDatabaseWorkbench instance={mysqlWorkbenchInstance()} onRequest={onRequest} />);
+
+    const workbench = await screen.findByTestId('windows-database-workbench');
+    expect(workbench).toHaveClass('windows-database-workbench');
+    expect(workbench).toHaveStyle('height: 100%');
+    expect(workbench).toHaveStyle('overflow: hidden');
+
+    fireEvent.click(screen.getByText('appdb'));
+
+    expect(await screen.findByText('table_60')).toBeInTheDocument();
+    expect(screen.getByTestId('windows-database-nav')).toHaveStyle('overflow: hidden');
+    expect(screen.getByTestId('windows-database-db-list')).toHaveStyle('overflow-y: auto');
+    expect(screen.getByTestId('windows-database-table-list')).toHaveStyle('overflow-y: auto');
+    expect(screen.getByTestId('windows-database-table-list')).toHaveStyle('min-height: 0');
+  });
+
   it('blocks non-readonly queries in the UI before sending them', async () => {
     const instance: WindowsDatabaseInstance = {
       id: 'mysql:127.0.0.1:3306',

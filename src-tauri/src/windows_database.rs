@@ -311,7 +311,11 @@ fn build_engine_command_plan_with_schema(
         },
         DatabaseEngine::Sqlserver => DatabaseCommandPlan {
             program: "sqlcmd".to_string(),
-            args: build_sqlserver_args(&sqlserver_server_arg(instance_target), database, &query),
+            args: build_sqlserver_args(
+                &sqlserver_server_arg(instance_target),
+                database,
+                &with_sqlserver_no_count(&query),
+            ),
             env: Vec::new(),
         },
         DatabaseEngine::Postgresql => DatabaseCommandPlan {
@@ -411,6 +415,15 @@ fn build_sqlserver_args(server: &str, database: &str, query: &str) -> Vec<String
     args.push("-Q".to_string());
     args.push(query.to_string());
     args
+}
+
+fn with_sqlserver_no_count(query: &str) -> String {
+    let trimmed = query.trim_start();
+    if trimmed.to_ascii_lowercase().starts_with("set nocount on") {
+        query.to_string()
+    } else {
+        format!("SET NOCOUNT ON; {}", query)
+    }
 }
 
 fn build_postgresql_args(instance_target: &str, database: &str, query: &str) -> Vec<String> {
@@ -760,7 +773,7 @@ fn build_mutation_command_plan(
             args: build_sqlserver_args(
                 &sqlserver_server_arg(instance_target),
                 &request.database,
-                &sql,
+                &with_sqlserver_no_count(&sql),
             ),
             env: Vec::new(),
         },
@@ -1020,6 +1033,24 @@ mod tests {
 
         expect_args_include(&plan.args, "-f");
         expect_args_include(&plan.args, "65001");
+    }
+
+    #[test]
+    fn prefixes_sqlserver_queries_with_no_count() {
+        let plan = build_engine_command_plan_with_schema(
+            DatabaseEngine::Sqlserver,
+            DatabaseAction::ListDatabases,
+            "sqlserver:MSSQLSERVER",
+            None,
+            None,
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+
+        let query_index = plan.args.iter().position(|arg| arg == "-Q").unwrap() + 1;
+        assert!(plan.args[query_index].starts_with("SET NOCOUNT ON; "));
     }
 
     #[test]

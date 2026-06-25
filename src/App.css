@@ -2563,11 +2563,52 @@ body {
 }
 
 .analysis-workbench .ant-table-tbody > tr:hover::before {
-  background: #0f766e;
+  content: none !important;
+  display: none !important;
 }
 
 .analysis-workbench .ant-tag {
   border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+.windows-database-modal .ant-modal-content {
+  max-height: calc(100vh - 64px);
+}
+
+.windows-database-workbench .windows-database-tabs.ant-tabs {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.windows-database-workbench .windows-database-tabs > .ant-tabs-content-holder,
+.windows-database-workbench .windows-database-tabs .ant-tabs-content,
+.windows-database-workbench .windows-database-tabs .ant-tabs-tabpane {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.windows-database-workbench .ant-table-tbody > tr:hover {
+  position: static !important;
+  transform: none !important;
+}
+
+.windows-database-workbench .ant-table-tbody > tr:hover::before {
+  content: none !important;
+  display: none !important;
+  width: 0 !important;
+}
+
+.windows-database-workbench .ant-table-tbody > tr > td {
+  transform: none !important;
+}
+
+.windows-database-workbench .windows-database-nav-button:focus,
+.windows-database-workbench .windows-database-nav-button:focus-visible {
+  outline: none !important;
   box-shadow: none !important;
 }
 

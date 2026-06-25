@@ -85,7 +85,7 @@ function mockWindowsLocalCommand(stdout: unknown) {
     }
 
     throw new Error(`Unexpected command: ${command}`);
-  }, 15000);
+  });
 }
 
 describe('Windows local analysis commands', () => {
@@ -320,6 +320,112 @@ describe('Windows local analysis commands', () => {
     });
 
     expect(screen.queryByText('閲囬泦璇婃柇')).not.toBeInTheDocument();
+  });
+
+  it('merges duplicate SQL Server listener addresses into one detail row', async () => {
+    mockWindowsLocalCommand([
+      '===DB_SERVICES===',
+      JSON.stringify([
+        {
+          Name: 'SQLSERVERAGENT',
+          DisplayName: 'SQL Server Agent (MSSQLSERVER)',
+          State: 'Stopped',
+          StartMode: 'Manual',
+          PathName: 'C:\\Program Files\\Microsoft SQL Server\\MSSQL16.MSSQLSERVER\\MSSQL\\Binn\\SQLAGENT.EXE',
+          ProcessId: 0,
+        },
+      ]),
+      '===DB_PORTS===',
+      JSON.stringify([
+        {
+          LocalAddress: '::',
+          LocalPort: 1433,
+          State: 'Listen',
+          OwningProcess: 7624,
+          ProcessName: 'sqlservr',
+          ProcessPath: 'C:\\Program Files\\Microsoft SQL Server\\MSSQL16.MSSQLSERVER\\MSSQL\\Binn\\sqlservr.exe',
+        },
+        {
+          LocalAddress: '0.0.0.0',
+          LocalPort: 1433,
+          State: 'Listen',
+          OwningProcess: 7624,
+          ProcessName: 'sqlservr',
+          ProcessPath: 'C:\\Program Files\\Microsoft SQL Server\\MSSQL16.MSSQLSERVER\\MSSQL\\Binn\\sqlservr.exe',
+        },
+        {
+          LocalAddress: '127.0.0.1',
+          LocalPort: 1434,
+          State: 'Listen',
+          OwningProcess: 7624,
+          ProcessName: 'sqlservr',
+          ProcessPath: 'C:\\Program Files\\Microsoft SQL Server\\MSSQL16.MSSQLSERVER\\MSSQL\\Binn\\sqlservr.exe',
+        },
+      ]),
+      '===DB_PROCESSES===',
+      '[]',
+      '===DB_INSTALLS===',
+      '[]',
+    ].join('\n'));
+
+    renderWindowsModule('database');
+
+    await waitFor(() => expect(screen.getByText('SQL Server Agent (MSSQLSERVER)')).toBeInTheDocument());
+
+    expect(screen.getAllByText('sqlservr')).toHaveLength(1);
+    expect(screen.getByText('1433, 1434')).toBeInTheDocument();
+    expect(screen.getAllByText(/127\.0\.0\.1/).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /查看详情/ })).toHaveLength(1);
+  });
+
+  it('hides localized SQL Server row-count noise from database navigation', async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'execute_local_command') {
+        return {
+          success: true,
+          stdout: [
+            '===DB_SERVICES===',
+            JSON.stringify([
+              {
+                Name: 'MSSQLSERVER',
+                DisplayName: 'SQL Server (MSSQLSERVER)',
+                State: 'Running',
+                StartMode: 'Auto',
+                PathName: 'C:\\Program Files\\Microsoft SQL Server\\MSSQL16.MSSQLSERVER\\MSSQL\\Binn\\sqlservr.exe',
+                ProcessId: 1234,
+              },
+            ]),
+            '===DB_PORTS===',
+            '[]',
+            '===DB_PROCESSES===',
+            '[]',
+            '===DB_INSTALLS===',
+            '[]',
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+
+      if (command === 'windows_database_readonly') {
+        return {
+          success: true,
+          stdout: ['name', 'master', 'model', '(6 \uFFFD\uFFFD\uFFFD\uFFFD\uFFFD)'].join('\n'),
+          stderr: '',
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    renderWindowsModule('database');
+
+    await waitFor(() => expect(screen.getByText('SQL Server (MSSQLSERVER)')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /查看详情/ }));
+
+    await waitFor(() => expect(screen.getByText('master')).toBeInTheDocument());
+    expect(screen.getByText('model')).toBeInTheDocument();
+    expect(screen.queryByText(/\uFFFD/)).not.toBeInTheDocument();
   });
 
   it('opens a Windows database detail workbench from a detected database row', async () => {
