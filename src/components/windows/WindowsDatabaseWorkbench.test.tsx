@@ -220,6 +220,25 @@ describe('windows database detail contract', () => {
     expect(screen.getByTestId('windows-database-table-list')).toHaveStyle('min-height: 0');
   });
 
+  it('renders database and table navigation items without native button chrome', async () => {
+    const onRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ databases: ['appdb'] })
+      .mockResolvedValueOnce({ tables: [{ schema: 'dbo', name: 'users' }] });
+
+    render(<WindowsDatabaseWorkbench instance={mysqlWorkbenchInstance()} onRequest={onRequest} />);
+
+    const databaseItem = await screen.findByRole('button', { name: 'appdb' });
+    expect(databaseItem.tagName).toBe('DIV');
+    expect(databaseItem).toHaveClass('windows-database-nav-button');
+
+    fireEvent.click(databaseItem);
+
+    const tableItem = await screen.findByRole('button', { name: /users/ });
+    expect(tableItem.tagName).toBe('DIV');
+    expect(tableItem).toHaveClass('windows-database-nav-button');
+  });
+
   it('blocks non-readonly queries in the UI before sending them', async () => {
     const instance: WindowsDatabaseInstance = {
       id: 'mysql:127.0.0.1:3306',

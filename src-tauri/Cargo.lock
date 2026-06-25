@@ -1078,6 +1078,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "ed25519-dalek",
+ "encoding_rs",
  "hex",
  "hostname",
  "log",

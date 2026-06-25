@@ -5,6 +5,7 @@ mod ssh;
 mod windows_database;
 
 use analyzer::AnalysisResult;
+use encoding_rs::GBK;
 use log::{error, info, warn};
 use remote::connection_manager::ConnectionManager;
 use remote::terminal_manager::{RemoteTerminalSession, TerminalManager, TerminalOutputEvent};
@@ -656,8 +657,8 @@ fn run_local_process_with_env(
     match output {
         Ok(out) => CommandResult {
             success: out.status.success(),
-            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+            stdout: decode_process_output(&out.stdout),
+            stderr: decode_process_output(&out.stderr),
             exit_code: out.status.code().unwrap_or(0),
         },
         Err(e) => CommandResult {
@@ -666,6 +667,20 @@ fn run_local_process_with_env(
             stderr: e.to_string(),
             exit_code: -1,
         },
+    }
+}
+
+fn decode_process_output(bytes: &[u8]) -> String {
+    match String::from_utf8(bytes.to_vec()) {
+        Ok(text) => text,
+        Err(_) => {
+            let (text, _, had_errors) = GBK.decode(bytes);
+            if had_errors {
+                String::from_utf8_lossy(bytes).to_string()
+            } else {
+                text.into_owned()
+            }
+        }
     }
 }
 
@@ -799,6 +814,13 @@ mod tests {
         assert_eq!(args[..3], ["-NoProfile", "-NonInteractive", "-Command"]);
         assert!(args[3].contains("$OutputEncoding"));
         assert!(args[3].contains("Get-Process | ConvertTo-Json"));
+    }
+
+    #[test]
+    fn local_process_output_decoder_falls_back_to_gbk_for_chinese_clients() {
+        let decoded = super::decode_process_output(&[0xD5, 0xC5, 0xC8, 0xFD]);
+
+        assert_eq!(decoded, "张三");
     }
 
     #[test]

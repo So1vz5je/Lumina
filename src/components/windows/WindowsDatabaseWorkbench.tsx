@@ -694,17 +694,24 @@ export function WindowsDatabaseWorkbench({
                 <div style={styles.listStack}>
                   {databases.map((database) => (
                     <div key={database} style={styles.listItem}>
-                      <button
+                      <div
                         className="windows-database-nav-button"
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => void handleDatabaseSelect(database)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            void handleDatabaseSelect(database);
+                          }
+                        }}
                         style={{
                           ...styles.navButton,
                           ...(selectedDatabase === database ? styles.navButtonActive : null),
                         }}
                       >
                         <span>{database}</span>
-                      </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -733,10 +740,17 @@ export function WindowsDatabaseWorkbench({
 
                     return (
                       <div key={tableKey} style={styles.listItem}>
-                        <button
+                        <div
                           className="windows-database-nav-button"
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           onClick={() => void handleTableSelect(table)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              void handleTableSelect(table);
+                            }
+                          }}
                           style={{
                             ...styles.navButton,
                             ...(selected ? styles.navButtonActive : null),
@@ -749,7 +763,7 @@ export function WindowsDatabaseWorkbench({
                             </Text>
                           ) : null}
                           <span style={styles.visuallyHidden}>{tableKey}</span>
-                        </button>
+                        </div>
                       </div>
                     );
                   })}
