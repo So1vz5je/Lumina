@@ -165,17 +165,39 @@ describe('Windows local analysis commands', () => {
     expect(getWindowsLocalCommand('listen_ports')).toContain('Get-NetTCPConnection');
   });
 
-  it('uses quick Windows event log previews for default module loading', () => {
-    for (const key of ['win_security_log', 'win_system_log', 'win_app_log', 'win_powershell_log', 'security_events']) {
+  it('loads Windows event logs as counted pages by default', () => {
+    for (const key of ['win_security_log', 'win_system_log', 'win_app_log', 'win_powershell_log']) {
       const command = getWindowsLocalCommand(key);
 
       expect(command, key).toContain('Get-WinEvent');
-      expect(command, key).toContain('-MaxEvents 500');
-      expect(command, key).toContain('previewLimit=500');
+      expect(command, key).toContain('Get-WinEvent -ListLog');
+      expect(command, key).toContain('-MaxEvents 50');
+      expect(command, key).toContain('totalCount');
+      expect(command, key).toContain('page=1');
+      expect(command, key).toContain('pageSize=50');
       expect(command, key).not.toContain('Export-Csv');
       expect(command, key).not.toContain('artifactPath');
-      expect(command, key).not.toMatch(/-MaxEvents 50(?!\d)/);
     }
+  });
+
+  it('builds Windows event log page commands for the requested page only', () => {
+    const command = getWindowsLocalCommand('win_security_log', '', { page: 3, pageSize: 20 });
+
+    expect(command).toContain('$skip=40');
+    expect(command).toContain('$take=20');
+    expect(command).toContain('-MaxEvents 60');
+    expect(command).toContain('page=3');
+    expect(command).toContain('pageSize=20');
+  });
+
+  it('keeps high-value security events as a bounded quick preview', () => {
+    const command = getWindowsLocalCommand('security_events');
+
+    expect(command).toContain('Get-WinEvent');
+    expect(command).toContain('-MaxEvents 500');
+    expect(command).toContain('previewLimit=500');
+    expect(command).not.toContain('Export-Csv');
+    expect(command).not.toContain('artifactPath');
   });
 
   it('keeps full Windows event log collection as an explicit temp artifact export', () => {

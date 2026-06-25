@@ -8154,6 +8154,31 @@ export default function ModuleDetail({
 
         // 根据搜索关键字过滤数据
         const filteredData = getFilteredTableData(tableData);
+        const isWindowsPagedLogTable = isWindowsLocalMode
+            && Boolean(windowsEventLogModuleNames[tableColumnKey])
+            && Boolean(windowsLogPageInfo);
+        const tablePagination = isWindowsPagedLogTable
+            ? {
+                current: windowsLogPageInfo?.page ?? 1,
+                pageSize: windowsLogPageInfo?.pageSize ?? WINDOWS_EVENT_LOG_DEFAULT_PAGE_SIZE,
+                total: windowsLogPageInfo?.totalCount ?? filteredData.length,
+                showSizeChanger: true,
+                pageSizeOptions: ['20', '50', '100', '200', '500'],
+                showTotal: (total: number) => `共 ${total} 条日志`,
+                showQuickJumper: true,
+                size: isModuleWorkbenchMode ? 'small' as const : 'default' as const,
+                onChange: (page: number, pageSize: number) => {
+                    void loadData({ windowsLogPage: page, windowsLogPageSize: pageSize });
+                },
+            }
+            : {
+                defaultPageSize: 50,
+                showSizeChanger: true,
+                pageSizeOptions: ['20', '50', '100', '200', '500'],
+                showTotal: (total: number) => `共 ${total} 条`,
+                showQuickJumper: true,
+                size: isModuleWorkbenchMode ? 'small' as const : 'default' as const,
+            };
 
         return (
             <Table
@@ -8162,14 +8187,7 @@ export default function ModuleDetail({
                 columns={visibleColumns}
                 size="small"
                 scroll={isModuleWorkbenchMode ? { x: 1200, y: 520 } : { y: 500 }}
-                pagination={{
-                    defaultPageSize: 50,
-                    showSizeChanger: true,
-                    pageSizeOptions: ['20', '50', '100', '200', '500'],
-                    showTotal: (total) => `共 ${total} 条`,
-                    showQuickJumper: true,
-                    size: isModuleWorkbenchMode ? 'small' : 'default',
-                }}
+                pagination={tablePagination}
                 virtual
             />
         );
@@ -10661,6 +10679,8 @@ export default function ModuleDetail({
                     <Text className="windows-result-count" type="secondary">
                         {collectionArtifact
                             ? `预览 ${filteredCount} 条 / 全量 ${collectionArtifact.totalCount} 条`
+                            : windowsLogPageInfo
+                                ? `第 ${windowsLogPageInfo.page} 页 / 共 ${windowsLogPageInfo.totalCount ?? filteredCount} 条日志`
                             : collectionPreviewLimit
                                 ? `快速预览 ${filteredCount} 条`
                             : `共 ${filteredCount} 条结果`}
@@ -10689,7 +10709,7 @@ export default function ModuleDetail({
                     {isCompactWindowsWorkspaceModule && (
                         <Button
                             icon={<ReloadOutlined spin={loading} />}
-                            onClick={loadData}
+                            onClick={() => loadData()}
                             loading={loading}
                             title="刷新数据"
                         >
@@ -10974,7 +10994,7 @@ export default function ModuleDetail({
                     <Button
                         type="text"
                         icon={<ReloadOutlined spin={loading} />}
-                        onClick={loadData}
+                        onClick={() => loadData()}
                         loading={loading}
                         title="刷新数据"
                         style={{ marginLeft: 'auto' }}
@@ -11047,6 +11067,8 @@ export default function ModuleDetail({
                             <Text type="secondary">
                                 {collectionArtifact
                                     ? `预览 ${filteredCount} 条 / 全量 ${collectionArtifact.totalCount} 条`
+                                    : windowsLogPageInfo
+                                        ? `第 ${windowsLogPageInfo.page} 页 / 共 ${windowsLogPageInfo.totalCount ?? filteredCount} 条日志`
                                     : `共 ${filteredCount} 条`}
                             </Text>
                         </div>

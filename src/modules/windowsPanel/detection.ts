@@ -342,7 +342,7 @@ function parseSections(output: string): Record<string, string> {
 
 function legacySiteRows(content: string, meta: { panelType: string; name: string; siteRoot: string }): DetailRecord[] {
   return parseJsonRecords(content)
-    .map((row, index) => {
+    .map<DetailRecord | null>((row, index) => {
       const name = readString(row, ['Name', 'name'], '');
       if (!name) return null;
 
@@ -359,7 +359,7 @@ function legacySiteRows(content: string, meta: { panelType: string; name: string
         last_modified: String(row.LastWriteTime ?? row.lastWriteTime ?? '-').split('T')[0],
       };
     })
-    .filter(isRecord);
+    .filter((row): row is DetailRecord => row !== null);
 }
 
 function parseLegacySections(sections: Record<string, string>): WindowsPanelDetectionData {
