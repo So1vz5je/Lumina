@@ -32,6 +32,41 @@ pub struct WindowsDatabaseRequest {
     pub row_limit: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DatabaseMutationAction {
+    InsertRow,
+    UpdateRow,
+    DeleteRow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RowIdentityColumn {
+    pub name: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RowIdentity {
+    pub columns: Vec<RowIdentityColumn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsDatabaseMutationRequest {
+    pub engine: DatabaseEngine,
+    pub action: DatabaseMutationAction,
+    pub instance_id: String,
+    pub database: String,
+    pub schema: Option<String>,
+    pub table: String,
+    pub values: Option<serde_json::Value>,
+    pub row_identity: Option<RowIdentity>,
+    pub generated_columns: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DatabaseCommandPlan {
     program: String,
@@ -310,6 +345,16 @@ pub async fn windows_database_readonly(request: WindowsDatabaseRequest) -> Comma
     run_local_process(&plan.program, &plan.args)
 }
 
+#[tauri::command]
+pub async fn windows_database_mutation(request: WindowsDatabaseMutationRequest) -> CommandResult {
+    let plan = match build_mutation_command_plan(&request) {
+        Ok(plan) => plan,
+        Err(err) => return command_error(&err),
+    };
+
+    run_local_process(&plan.program, &plan.args)
+}
+
 fn command_error(message: &str) -> CommandResult {
     CommandResult {
         success: false,
@@ -467,6 +512,251 @@ fn required_database(database: &str) -> Result<&str, String> {
     }
 }
 
+fn validate_identifier(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+    {
+        return Err("unsafe identifier".to_string());
+    }
+
+    Ok(())
+}
+
+fn values_object(value: &Option<serde_json::Value>) -> Result<Vec<(String, serde_json::Value)>, String> {
+    let Some(serde_json::Value::Object(values)) = value else {
+        return Err("values are required".to_string());
+    };
+
+    if values.is_empty() {
+        return Err("values are required".to_string());
+    }
+
+    values
+        .iter()
+        .map(|(name, value)| {
+            validate_identifier(name)?;
+            Ok((name.clone(), value.clone()))
+        })
+        .collect()
+}
+
+fn filtered_values(
+    values: &Option<serde_json::Value>,
+    generated_columns: &Option<Vec<String>>,
+) -> Result<Vec<(String, serde_json::Value)>, String> {
+    let generated = generated_columns
+        .as_ref()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item.to_ascii_lowercase())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let filtered = values_object(values)?
+        .into_iter()
+        .filter(|(name, _)| {
+            !generated
+                .iter()
+                .any(|generated_name| generated_name == &name.to_ascii_lowercase())
+        })
+        .collect::<Vec<_>>();
+
+    if filtered.is_empty() {
+        return Err("values are required".to_string());
+    }
+
+    Ok(filtered)
+}
+
+fn render_sql_literal(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "NULL".to_string(),
+        serde_json::Value::Bool(value) => {
+            if *value {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            }
+        }
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::String(value) => format!("'{}'", escape_sql_literal(value)),
+        other => format!("'{}'", escape_sql_literal(&other.to_string())),
+    }
+}
+
+fn quote_identifier(engine: DatabaseEngine, value: &str) -> String {
+    match engine {
+        DatabaseEngine::Mysql => format!("`{}`", escape_mysql_identifier(value)),
+        DatabaseEngine::Sqlserver => format!("[{}]", escape_sqlserver_identifier(value)),
+        DatabaseEngine::Postgresql => escape_psql_identifier(value),
+    }
+}
+
+fn mutation_where_clause(engine: DatabaseEngine, identity: &RowIdentity) -> Result<String, String> {
+    if identity.columns.is_empty() {
+        return Err("row identity is required".to_string());
+    }
+
+    identity
+        .columns
+        .iter()
+        .map(|column| {
+            validate_identifier(&column.name)?;
+            Ok(format!(
+                "{} = {}",
+                quote_identifier(engine, &column.name),
+                render_sql_literal(&column.value)
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map(|parts| parts.join(" AND "))
+}
+
+fn qualified_mutation_table(
+    engine: DatabaseEngine,
+    schema: &str,
+    table: &str,
+) -> Result<String, String> {
+    validate_identifier(table)?;
+    if !schema.is_empty() {
+        validate_identifier(schema)?;
+    }
+
+    Ok(match engine {
+        DatabaseEngine::Mysql => quote_identifier(engine, table),
+        DatabaseEngine::Sqlserver | DatabaseEngine::Postgresql => {
+            format!(
+                "{}.{}",
+                quote_identifier(engine, schema),
+                quote_identifier(engine, table)
+            )
+        }
+    })
+}
+
+fn build_mutation_sql(request: &WindowsDatabaseMutationRequest) -> Result<String, String> {
+    validate_identifier(&request.database)?;
+    validate_identifier(&request.table)?;
+    if let Some(schema) = request.schema.as_deref() {
+        validate_identifier(schema)?;
+    }
+
+    let schema = request.schema.as_deref().unwrap_or(match request.engine {
+        DatabaseEngine::Sqlserver => "dbo",
+        DatabaseEngine::Postgresql => "public",
+        DatabaseEngine::Mysql => "",
+    });
+    let table = qualified_mutation_table(request.engine, schema, &request.table)?;
+
+    match request.action {
+        DatabaseMutationAction::InsertRow => {
+            let values = filtered_values(&request.values, &request.generated_columns)?;
+            let columns = values
+                .iter()
+                .map(|(name, _)| quote_identifier(request.engine, name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let literals = values
+                .iter()
+                .map(|(_, value)| render_sql_literal(value))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            Ok(format!(
+                "INSERT INTO {} ({}) VALUES ({});",
+                table, columns, literals
+            ))
+        }
+        DatabaseMutationAction::UpdateRow => {
+            let identity = request
+                .row_identity
+                .as_ref()
+                .ok_or_else(|| "row identity is required".to_string())?;
+            let values = filtered_values(&request.values, &request.generated_columns)?;
+            let assignments = values
+                .iter()
+                .map(|(name, value)| {
+                    Ok(format!(
+                        "{} = {}",
+                        quote_identifier(request.engine, name),
+                        render_sql_literal(value)
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?
+                .join(", ");
+            let where_clause = mutation_where_clause(request.engine, identity)?;
+
+            match request.engine {
+                DatabaseEngine::Mysql => Ok(format!(
+                    "UPDATE {} SET {} WHERE {} LIMIT 1;",
+                    table, assignments, where_clause
+                )),
+                DatabaseEngine::Sqlserver => Ok(format!(
+                    "UPDATE TOP (1) {} SET {} WHERE {};",
+                    table, assignments, where_clause
+                )),
+                DatabaseEngine::Postgresql => Ok(format!(
+                    "WITH target AS (SELECT 1 FROM {} WHERE {} LIMIT 1) UPDATE {} SET {} WHERE {} RETURNING 1;",
+                    table, where_clause, table, assignments, where_clause
+                )),
+            }
+        }
+        DatabaseMutationAction::DeleteRow => {
+            let identity = request
+                .row_identity
+                .as_ref()
+                .ok_or_else(|| "row identity is required".to_string())?;
+            let where_clause = mutation_where_clause(request.engine, identity)?;
+
+            match request.engine {
+                DatabaseEngine::Mysql => Ok(format!(
+                    "DELETE FROM {} WHERE {} LIMIT 1;",
+                    table, where_clause
+                )),
+                DatabaseEngine::Sqlserver => Ok(format!(
+                    "DELETE TOP (1) FROM {} WHERE {};",
+                    table, where_clause
+                )),
+                DatabaseEngine::Postgresql => Ok(format!(
+                    "WITH target AS (SELECT 1 FROM {} WHERE {} LIMIT 1) DELETE FROM {} WHERE {} RETURNING 1;",
+                    table, where_clause, table, where_clause
+                )),
+            }
+        }
+    }
+}
+
+fn build_mutation_command_plan(
+    request: &WindowsDatabaseMutationRequest,
+) -> Result<DatabaseCommandPlan, String> {
+    let sql = build_mutation_sql(request)?;
+    let instance_target = parse_instance_target(request.engine, &request.instance_id)?;
+
+    Ok(match request.engine {
+        DatabaseEngine::Mysql => DatabaseCommandPlan {
+            program: "mysql".to_string(),
+            args: build_mysql_args(instance_target, &request.database, &sql),
+        },
+        DatabaseEngine::Sqlserver => DatabaseCommandPlan {
+            program: "sqlcmd".to_string(),
+            args: build_sqlserver_args(
+                &sqlserver_server_arg(instance_target),
+                &request.database,
+                &sql,
+            ),
+        },
+        DatabaseEngine::Postgresql => DatabaseCommandPlan {
+            program: "psql".to_string(),
+            args: build_postgresql_args(instance_target, &request.database, &sql),
+        },
+    })
+}
+
 fn contains_sql_keyword(sql: &str, keyword: &str) -> bool {
     sql.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
         .any(|token| token == keyword)
@@ -487,8 +777,9 @@ fn contains_sql_sequence(sql: &str, sequence: &[&str]) -> bool {
 mod tests {
     use super::{
         build_engine_command, build_engine_command_plan_with_schema,
-        build_engine_command_with_schema, ensure_readonly_sql, DatabaseAction, DatabaseEngine,
-        WindowsDatabaseRequest,
+        build_engine_command_with_schema, build_mutation_command_plan, ensure_readonly_sql,
+        DatabaseAction, DatabaseEngine, DatabaseMutationAction, RowIdentity, RowIdentityColumn,
+        WindowsDatabaseMutationRequest, WindowsDatabaseRequest,
     };
     use serde_json::json;
 
@@ -695,6 +986,150 @@ mod tests {
 
         assert_eq!(request.instance_id, "mysql:127.0.0.1:3306");
         assert_eq!(request.row_limit, Some(25));
+    }
+
+    #[test]
+    fn deserializes_mutation_request_from_camel_case_fields() {
+        let request: WindowsDatabaseMutationRequest = serde_json::from_value(json!({
+            "engine": "mysql",
+            "action": "updateRow",
+            "instanceId": "mysql:127.0.0.1:3306",
+            "database": "appdb",
+            "table": "users",
+            "values": { "email": "new@example.com" },
+            "rowIdentity": { "columns": [{ "name": "id", "value": "7" }] },
+            "generatedColumns": ["id"]
+        }))
+        .unwrap();
+
+        assert_eq!(request.instance_id, "mysql:127.0.0.1:3306");
+        assert_eq!(request.generated_columns, Some(vec!["id".to_string()]));
+    }
+
+    #[test]
+    fn rejects_update_without_row_identity() {
+        let request = mutation_request(DatabaseEngine::Mysql, DatabaseMutationAction::UpdateRow);
+        let error = build_mutation_command_plan(&WindowsDatabaseMutationRequest {
+            row_identity: None,
+            ..request
+        })
+        .unwrap_err();
+
+        assert!(error.contains("row identity"));
+    }
+
+    #[test]
+    fn builds_mysql_insert_with_escaped_literals() {
+        let request = WindowsDatabaseMutationRequest {
+            engine: DatabaseEngine::Mysql,
+            action: DatabaseMutationAction::InsertRow,
+            instance_id: "mysql:127.0.0.1:3306".to_string(),
+            database: "appdb".to_string(),
+            schema: None,
+            table: "users".to_string(),
+            values: Some(json!({ "email": "o'reilly@example.com", "nickname": null })),
+            row_identity: None,
+            generated_columns: Some(vec!["id".to_string()]),
+        };
+
+        let plan = build_mutation_command_plan(&request).unwrap();
+        let sql = plan.args.last().unwrap();
+
+        assert!(sql.contains("INSERT INTO `users`"));
+        assert!(sql.contains("'o''reilly@example.com'"));
+        assert!(sql.contains("NULL"));
+        assert!(!sql.contains("`id`"));
+    }
+
+    #[test]
+    fn builds_sqlserver_update_with_single_row_guard() {
+        let request = WindowsDatabaseMutationRequest {
+            engine: DatabaseEngine::Sqlserver,
+            action: DatabaseMutationAction::UpdateRow,
+            instance_id: "sqlserver:MSSQLSERVER".to_string(),
+            database: "appdb".to_string(),
+            schema: Some("dbo".to_string()),
+            table: "users".to_string(),
+            values: Some(json!({ "email": "new@example.com" })),
+            row_identity: Some(RowIdentity {
+                columns: vec![RowIdentityColumn {
+                    name: "id".to_string(),
+                    value: json!("7"),
+                }],
+            }),
+            generated_columns: None,
+        };
+
+        let plan = build_mutation_command_plan(&request).unwrap();
+        let sql = plan.args.last().unwrap();
+
+        assert!(sql.contains("UPDATE TOP (1) [dbo].[users]"));
+        assert!(sql.contains("WHERE [id] = '7'"));
+    }
+
+    #[test]
+    fn builds_postgresql_delete_with_returning_guard() {
+        let request = WindowsDatabaseMutationRequest {
+            engine: DatabaseEngine::Postgresql,
+            action: DatabaseMutationAction::DeleteRow,
+            instance_id: "postgresql:127.0.0.1:5432".to_string(),
+            database: "appdb".to_string(),
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            values: None,
+            row_identity: Some(RowIdentity {
+                columns: vec![RowIdentityColumn {
+                    name: "id".to_string(),
+                    value: json!(7),
+                }],
+            }),
+            generated_columns: None,
+        };
+
+        let plan = build_mutation_command_plan(&request).unwrap();
+        let sql = plan.args.last().unwrap();
+
+        assert!(sql.contains("WITH target AS"));
+        assert!(sql.contains("DELETE FROM public.users"));
+        assert!(sql.contains("RETURNING 1"));
+    }
+
+    #[test]
+    fn rejects_unsafe_identifier_in_mutation_request() {
+        let error = build_mutation_command_plan(&WindowsDatabaseMutationRequest {
+            table: "users; DROP TABLE users".to_string(),
+            ..mutation_request(DatabaseEngine::Mysql, DatabaseMutationAction::InsertRow)
+        })
+        .unwrap_err();
+
+        assert!(error.contains("identifier"));
+    }
+
+    fn mutation_request(
+        engine: DatabaseEngine,
+        action: DatabaseMutationAction,
+    ) -> WindowsDatabaseMutationRequest {
+        WindowsDatabaseMutationRequest {
+            engine,
+            action,
+            instance_id: match engine {
+                DatabaseEngine::Mysql => "mysql:127.0.0.1:3306",
+                DatabaseEngine::Sqlserver => "sqlserver:MSSQLSERVER",
+                DatabaseEngine::Postgresql => "postgresql:127.0.0.1:5432",
+            }
+            .to_string(),
+            database: "appdb".to_string(),
+            schema: None,
+            table: "users".to_string(),
+            values: Some(json!({ "email": "new@example.com" })),
+            row_identity: Some(RowIdentity {
+                columns: vec![RowIdentityColumn {
+                    name: "id".to_string(),
+                    value: json!("7"),
+                }],
+            }),
+            generated_columns: None,
+        }
     }
 
     fn expect_args_include(args: &[String], expected: &str) {

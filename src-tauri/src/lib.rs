@@ -726,6 +726,7 @@ pub fn run() {
             ssh_is_connected,
             execute_local_command,
             windows_database::windows_database_readonly,
+            windows_database::windows_database_mutation,
             get_machine_info,
             verify_license,
             activate_license,
