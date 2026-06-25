@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import ModuleDetail, { getWindowsLocalCommand, windowsLocalColumnTitles } from './ModuleDetail';
+import ModuleDetail, { getWindowsFullCollectionCommand, getWindowsLocalCommand, windowsLocalColumnTitles } from './ModuleDetail';
 
 const { invokeMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -163,6 +163,31 @@ describe('Windows local analysis commands', () => {
     expect(getWindowsLocalCommand('rdp')).toContain('netstat -ano');
     expect(getWindowsLocalCommand('network_conn')).toContain('Get-NetTCPConnection');
     expect(getWindowsLocalCommand('listen_ports')).toContain('Get-NetTCPConnection');
+  });
+
+  it('uses quick Windows event log previews for default module loading', () => {
+    for (const key of ['win_security_log', 'win_system_log', 'win_app_log', 'win_powershell_log', 'security_events']) {
+      const command = getWindowsLocalCommand(key);
+
+      expect(command, key).toContain('Get-WinEvent');
+      expect(command, key).toContain('-MaxEvents 500');
+      expect(command, key).toContain('previewLimit=500');
+      expect(command, key).not.toContain('Export-Csv');
+      expect(command, key).not.toContain('artifactPath');
+      expect(command, key).not.toMatch(/-MaxEvents 50(?!\d)/);
+    }
+  });
+
+  it('keeps full Windows event log collection as an explicit temp artifact export', () => {
+    for (const key of ['win_security_log', 'win_system_log', 'win_app_log', 'win_powershell_log', 'security_events']) {
+      const command = getWindowsFullCollectionCommand(key);
+
+      expect(command, key).toContain('Lumina-IR');
+      expect(command, key).toContain('Export-Csv');
+      expect(command, key).toContain('artifactPath');
+      expect(command, key).toContain('Select-Object -First 500');
+      expect(command, key).not.toContain('MaxEvents');
+    }
   });
 
   it('has concrete high-value Windows DFIR collectors', () => {

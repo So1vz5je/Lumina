@@ -5,6 +5,7 @@ use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const SECURITY_EVENT_PREVIEW_LIMIT: u32 = 500;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityEvent {
@@ -24,7 +25,7 @@ pub struct SecurityEventsAnalyzer;
 impl SecurityEventsAnalyzer {
     /// 使用 wevtutil 查询安全日志
     fn query_security_events(filter: &str, max_events: u32) -> Vec<SecurityEvent> {
-        let query = format!(r#"*[System[{}]]"#, filter);
+        let _query = format!(r#"*[System[{}]]"#, filter);
 
         let output = Command::new("wevtutil")
             .args([
@@ -44,28 +45,32 @@ impl SecurityEventsAnalyzer {
         Self::parse_wevtutil_output(&output)
     }
 
-    /// 使用 PowerShell 查询事件日志（更可靠）
-    fn query_events_powershell(event_ids: &[u32], max_events: u32) -> Vec<SecurityEvent> {
+    fn build_powershell_preview_command(event_ids: &[u32]) -> String {
         let ids_str = event_ids
             .iter()
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(",");
 
-        let ps_command = format!(
-            r#"Get-WinEvent -FilterHashtable @{{LogName='Security';ID=@({})}} -MaxEvents {} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress"#,
-            ids_str, max_events
-        );
+        format!(
+            r#"$ErrorActionPreference='SilentlyContinue'; $events=@(Get-WinEvent -FilterHashtable @{{LogName='Security';ID=@({})}} -MaxEvents {} | Select-Object TimeCreated,Id,Message); [pscustomobject]@{{previewLimit={};isPreview=$true;preview=@($events)}} | ConvertTo-Json -Compress -Depth 5"#,
+            ids_str, SECURITY_EVENT_PREVIEW_LIMIT, SECURITY_EVENT_PREVIEW_LIMIT
+        )
+    }
+
+    /// 使用 PowerShell 查询事件日志（更可靠）
+    fn query_events_powershell(event_ids: &[u32]) -> (Vec<SecurityEvent>, serde_json::Value) {
+        let ps_command = Self::build_powershell_preview_command(event_ids);
 
         let output = Command::new("powershell")
-            .args(["-NoProfile", "-Command", &ps_command])
+            .args(["-NoProfile", "-Command", ps_command.as_str()])
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
 
-        Self::parse_powershell_json(&output)
+        Self::parse_powershell_collection_json(&output)
     }
 
     /// 解析 PowerShell JSON 输出
@@ -90,6 +95,22 @@ impl SecurityEventsAnalyzer {
         }
 
         events
+    }
+
+    fn parse_powershell_collection_json(json_str: &str) -> (Vec<SecurityEvent>, serde_json::Value) {
+        let value = serde_json::from_str::<serde_json::Value>(json_str).unwrap_or_default();
+        let preview = value
+            .get("preview")
+            .cloned()
+            .or_else(|| value.get("Preview").cloned())
+            .unwrap_or(serde_json::Value::Array(Vec::new()));
+        let events = if preview.is_array() {
+            Self::parse_powershell_json(&preview.to_string())
+        } else {
+            Self::parse_powershell_json(json_str)
+        };
+
+        (events, value)
     }
 
     /// 解析单个事件 JSON
@@ -326,10 +347,15 @@ impl Analyzer for SecurityEventsAnalyzer {
         ];
 
         // 使用 PowerShell 查询（更可靠）
-        let events = Self::query_events_powershell(&important_event_ids, 100);
+        let (events, collection) = Self::query_events_powershell(&important_event_ids);
 
         // 统计
-        let total_count = events.len();
+        let preview_count = events.len();
+        let total_count = collection
+            .get("totalCount")
+            .or_else(|| collection.get("TotalCount"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(preview_count as u64) as usize;
         let login_success = events.iter().filter(|e| e.event_id == 4624).count();
         let login_failed = events.iter().filter(|e| e.event_id == 4625).count();
         let account_changes = events
@@ -355,6 +381,7 @@ impl Analyzer for SecurityEventsAnalyzer {
             "events": events,
             "statistics": {
                 "total_count": total_count,
+                "preview_count": preview_count,
                 "login_success": login_success,
                 "login_failed": login_failed,
                 "account_changes": account_changes,
@@ -364,6 +391,7 @@ impl Analyzer for SecurityEventsAnalyzer {
             "failed_logins": failed_logins,
             "account_changes": account_changes_list,
             "suspicious_events": suspicious_events
+            ,"collection": collection
         });
 
         let status = if suspicious_count > 0 || login_failed > 5 {
@@ -389,5 +417,21 @@ impl Analyzer for SecurityEventsAnalyzer {
             summary,
             details,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quick_scan_security_events_uses_bounded_preview_without_csv_export() {
+        let command = SecurityEventsAnalyzer::build_powershell_preview_command(&[4624, 4625]);
+
+        assert!(command.contains("Get-WinEvent"));
+        assert!(command.contains("-MaxEvents 500"));
+        assert!(command.contains("previewLimit=500"));
+        assert!(!command.contains("Export-Csv"));
+        assert!(!command.contains("artifactPath"));
     }
 }

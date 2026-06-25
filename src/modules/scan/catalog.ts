@@ -82,6 +82,13 @@ export const scanModuleCatalog: ScanModuleDefinition[] = [
     defaultEnabled: true,
   },
   {
+    id: 'security_posture',
+    label: '安全状态',
+    group: '安全',
+    description: 'Defender、防火墙、RDP、hosts 文件和关键安全配置。',
+    defaultEnabled: true,
+  },
+  {
     id: 'docker',
     label: 'Docker',
     group: '容器',

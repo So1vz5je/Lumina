@@ -41,7 +41,7 @@ describe('Results', () => {
       },
     ];
 
-    render(<Results results={results} />);
+    const { container } = render(<Results results={results} />);
 
     fireEvent.click(screen.getAllByText('security_events')[0]);
 
@@ -71,13 +71,16 @@ describe('Results', () => {
 
     expect(container.querySelector('.scan-results-workspace')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-commandbar')).toBeInTheDocument();
-    expect(container.querySelector('.scan-results-scope-strip')).toBeInTheDocument();
-    expect(container.querySelector('.scan-results-sidebar')).toBeInTheDocument();
-    expect(container.querySelector('.scan-result-detail')).toBeInTheDocument();
+    expect(container.querySelector('.scan-results-scope-strip')).not.toBeInTheDocument();
+    expect(container.querySelector('.scan-results-priority-panel')).not.toBeInTheDocument();
+    expect(container.querySelector('.scan-results-soc-shell')).toBeInTheDocument();
+    expect(container.querySelector('.scan-module-rail')).not.toBeInTheDocument();
+    expect(container.querySelector('.scan-module-strip')).toBeInTheDocument();
+    expect(container.querySelector('.scan-result-detail-panel')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-overview')).not.toBeInTheDocument();
     expect(screen.getByText('应急扫描结果')).toBeInTheDocument();
-    expect(screen.getByText('快速扫描覆盖范围')).toBeInTheDocument();
-    expect(screen.getAllByText('处置优先级').length).toBeGreaterThan(0);
+    expect(screen.getByText(/本机分析模块/)).toBeInTheDocument();
+    expect(screen.getAllByText('处置').length).toBeGreaterThan(0);
     expect(screen.getAllByText('系统信息').length).toBeGreaterThan(0);
     expect(screen.getAllByText('安全事件').length).toBeGreaterThan(0);
   });
@@ -117,12 +120,12 @@ describe('Results', () => {
 
     const { container } = render(<Results results={results} />);
 
-    expect(container.querySelector('.scan-results-priority-panel')).toBeInTheDocument();
+    expect(container.querySelector('.scan-results-soc-shell')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-detail-grid')).toBeInTheDocument();
-    expect(container.querySelector('.scan-selected-module-card')).toBeInTheDocument();
-    expect(screen.getAllByText('处置优先级').length).toBeGreaterThan(0);
+    expect(container.querySelector('.scan-detail-surface')).toBeInTheDocument();
+    expect(screen.getAllByText('处置').length).toBeGreaterThan(0);
     expect(screen.getAllByText('需优先复核').length).toBeGreaterThan(0);
-    expect(screen.getByText('已选模块')).toBeInTheDocument();
+    expect(screen.getByText('当前模块')).toBeInTheDocument();
     expect(screen.getByText('1 个关键条目')).toBeInTheDocument();
   });
 
@@ -142,7 +145,7 @@ describe('Results', () => {
       },
     ];
 
-    render(<Results results={results} />);
+    const { container } = render(<Results results={results} />);
 
     expect(screen.getAllByText('计划任务').length).toBeGreaterThan(0);
     expect(screen.getAllByText('持久化检测').length).toBeGreaterThan(0);
@@ -196,7 +199,7 @@ describe('Results', () => {
       },
     ];
 
-    render(<Results results={results} />);
+    const { container } = render(<Results results={results} />);
 
     expect(screen.getAllByText('Docker').length).toBeGreaterThan(0);
     expect(screen.getAllByText('面板检测').length).toBeGreaterThan(0);
@@ -266,7 +269,7 @@ describe('Results', () => {
       },
     ];
 
-    render(<Results results={results} />);
+    const { container } = render(<Results results={results} />);
 
     await waitFor(() => {
       expect(screen.getByText('关键明细')).toBeInTheDocument();
@@ -285,6 +288,80 @@ describe('Results', () => {
     fireEvent.click(screen.getAllByText('file_scan')[0]);
     expect(screen.getByText('dropper.tmp')).toBeInTheDocument();
     expect(screen.getAllByText(/C:\\Users\\analyst\\AppData\\Local\\Temp/).length).toBeGreaterThan(0);
+  });
+
+  it('renders security posture findings for incident response review', async () => {
+    const results = [
+      {
+        module_name: 'security_posture',
+        status: 'warning',
+        summary: '发现 4 个安全状态关注项',
+        details: {
+          defender: {
+            AntivirusEnabled: true,
+            RealTimeProtectionEnabled: false,
+            SignatureLastUpdated: '2026-05-26 10:00:00',
+          },
+          firewall_profiles: [
+            {
+              Name: 'Domain',
+              Enabled: false,
+              DefaultInboundAction: 'Block',
+              DefaultOutboundAction: 'Allow',
+            },
+          ],
+          rdp: {
+            Enabled: true,
+            ServiceStatus: 'Running',
+            ServiceStartType: 'Manual',
+          },
+          hosts_entries: [
+            {
+              address: '127.0.0.1',
+              hostname: 'www.microsoft.com',
+              line: '127.0.0.1 www.microsoft.com',
+              suspicious: true,
+              reason: 'hosts 文件疑似拦截安全厂商或系统更新域名',
+            },
+          ],
+          findings: [
+            {
+              name: 'Defender 实时防护关闭',
+              category: 'Defender',
+              risk: 'warning',
+              detail: '实时防护关闭会降低木马落地和横向移动检测能力。',
+            },
+            {
+              name: 'Windows 防火墙 Domain 配置关闭',
+              category: 'Windows 防火墙',
+              risk: 'warning',
+              detail: '至少一个防火墙配置文件未启用。',
+            },
+            {
+              name: '远程桌面已开启',
+              category: '远程访问',
+              risk: 'warning',
+              detail: 'RDP 入口开启。',
+            },
+            {
+              name: 'hosts 可疑映射：www.microsoft.com',
+              category: 'hosts 文件',
+              risk: 'warning',
+              detail: 'hosts 文件疑似拦截安全厂商或系统更新域名',
+            },
+          ],
+        },
+      },
+    ];
+
+    const { container } = render(<Results results={results} />);
+
+    expect(container.querySelector('.scan-finding-table')).toBeInTheDocument();
+    expect(screen.getAllByText('安全状态').length).toBeGreaterThan(0);
+    expect(screen.getByText('Defender 实时防护关闭')).toBeInTheDocument();
+    expect(screen.getAllByText('Windows 防火墙').length).toBeGreaterThan(0);
+    expect(screen.getByText('远程桌面')).toBeInTheDocument();
+    expect(screen.getByText('www.microsoft.com')).toBeInTheDocument();
   });
 
   it('renders system, user trace, network, and process scan results as readable findings', async () => {
@@ -374,7 +451,7 @@ describe('Results', () => {
       },
     ];
 
-    render(<Results results={results} />);
+    const { container } = render(<Results results={results} />);
 
     await waitFor(() => {
       expect(screen.getByText('WIN-IR')).toBeInTheDocument();
@@ -388,6 +465,9 @@ describe('Results', () => {
     expect(screen.getByText('analyst')).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByText('network')[0]);
+    expect(container.querySelector('.scan-finding-table')).toBeInTheDocument();
+    expect(container.querySelector('.scan-finding-record')).toBeInTheDocument();
+    expect(container.querySelector('.scan-finding-row')).not.toBeInTheDocument();
     expect(screen.getByText('198.51.100.22:4444')).toBeInTheDocument();
     expect(screen.getByText('Ethernet0')).toBeInTheDocument();
     expect(screen.getAllByText(/8\.8\.8\.8/).length).toBeGreaterThan(0);

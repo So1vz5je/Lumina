@@ -83,12 +83,13 @@ describe('Scan', () => {
     expect(container.querySelector('.scan-group-filter-bar')).toBeInTheDocument();
     expect(container.querySelector('.scan-module-grid')).toBeInTheDocument();
     expect(container.querySelector('.scan-module-group-section')).not.toBeInTheDocument();
-    expect(container.querySelectorAll('.scan-module-card').length).toBe(12);
+    expect(container.querySelectorAll('.scan-module-card').length).toBe(13);
     expect(screen.getByText('快速扫描')).toBeInTheDocument();
     expect(screen.getByText('扫描范围')).toBeInTheDocument();
     expect(screen.getByText(/系统信息、用户痕迹、网络、进程、文件、持久化、应用、日志和容器/)).toBeInTheDocument();
     expect(screen.getByText('扫描状态')).toBeInTheDocument();
     expect(screen.getByText('系统信息')).toBeInTheDocument();
+    expect(screen.getByText('安全状态')).toBeInTheDocument();
     expect(screen.getByText('持久化检测')).toBeInTheDocument();
   });
 

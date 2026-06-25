@@ -19,8 +19,8 @@ pub mod windows;
 #[cfg(target_os = "windows")]
 use windows::{
     CronAnalyzer, DatabaseAnalyzer, DockerAnalyzer, FileScanAnalyzer, NetworkAnalyzer,
-    PanelAnalyzer, PersistenceAnalyzer, ProcessAnalyzer, SecurityEventsAnalyzer, StartupAnalyzer,
-    SystemInfoAnalyzer, UserTraceAnalyzer,
+    PanelAnalyzer, PersistenceAnalyzer, ProcessAnalyzer, SecurityEventsAnalyzer,
+    SecurityPostureAnalyzer, StartupAnalyzer, SystemInfoAnalyzer, UserTraceAnalyzer,
 };
 
 #[cfg(target_os = "windows")]
@@ -41,6 +41,7 @@ fn windows_analyzer_runners() -> Vec<(&'static str, AnalyzerRunner)> {
         ("panel", || PanelAnalyzer.run()),
         ("database", || DatabaseAnalyzer.run()),
         ("security_events", || SecurityEventsAnalyzer.run()),
+        ("security_posture", || SecurityPostureAnalyzer.run()),
     ]
 }
 
@@ -82,6 +83,7 @@ mod tests {
         assert!(module_names.contains(&"persistence".to_string()));
         assert!(module_names.contains(&"docker".to_string()));
         assert!(module_names.contains(&"panel".to_string()));
+        assert!(module_names.contains(&"security_posture".to_string()));
     }
 
     #[test]

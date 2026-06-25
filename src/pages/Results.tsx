@@ -13,6 +13,8 @@ import { getScanModuleLabel, getScanStatusMeta, scanModuleCatalog } from '../mod
 
 const { Paragraph, Text, Title } = Typography;
 
+const RESULT_PREVIEW_LIMIT = 50;
+
 interface ResultsProps {
   results?: AnalysisResult[];
 }
@@ -91,6 +93,10 @@ function getTextArray(details: DetailRecord, key: string): string[] {
   return value.map((item) => valueToText(item, '')).filter(Boolean);
 }
 
+function previewRows<T>(rows: T[]): T[] {
+  return rows.slice(0, RESULT_PREVIEW_LIMIT);
+}
+
 function formatByteCount(value: unknown): string {
   const bytes = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(bytes) || bytes <= 0) return '-';
@@ -156,9 +162,9 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   }
 
   if (result.module_name === 'user_trace') {
-    const suspiciousUsers = getArray(details, 'suspicious_users').slice(0, 10);
-    const sessions = getArray(details, 'sessions').slice(0, 10);
-    const users = suspiciousUsers.length > 0 ? suspiciousUsers : getArray(details, 'users').slice(0, 10);
+    const suspiciousUsers = getArray(details, 'suspicious_users');
+    const sessions = getArray(details, 'sessions');
+    const users = previewRows(suspiciousUsers.length > 0 ? suspiciousUsers : getArray(details, 'users'));
     const sections: FindingSection[] = [];
 
     if (users.length > 0) {
@@ -182,7 +188,7 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
     if (sessions.length > 0) {
       sections.push({
         title: '登录会话',
-        rows: sessions.map((session, index) => ({
+        rows: previewRows(sessions).map((session, index) => ({
           key: `session-${index}`,
           title: readField(session, ['username', 'User']),
           subtitle: readField(session, ['session_name', 'sessionName']),
@@ -199,10 +205,10 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   }
 
   if (result.module_name === 'network') {
-    const externalConnections = getArray(details, 'external_connections').slice(0, 10);
-    const fallbackConnections = getArray(details, 'connections').slice(0, 10);
-    const connections = externalConnections.length > 0 ? externalConnections : fallbackConnections;
-    const interfaces = getArray(details, 'interfaces').slice(0, 8);
+    const externalConnections = getArray(details, 'external_connections');
+    const fallbackConnections = getArray(details, 'connections');
+    const connections = previewRows(externalConnections.length > 0 ? externalConnections : fallbackConnections);
+    const interfaces = previewRows(getArray(details, 'interfaces'));
     const sections: FindingSection[] = [];
 
     if (connections.length > 0) {
@@ -254,10 +260,10 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   }
 
   if (result.module_name === 'process') {
-    const suspiciousProcesses = getArray(details, 'suspicious_list').slice(0, 10);
-    const fallbackProcesses = getArray(details, 'processes').slice(0, 10);
-    const processes = suspiciousProcesses.length > 0 ? suspiciousProcesses : fallbackProcesses;
-    const services = getTextArray(details, 'services').slice(0, 10);
+    const suspiciousProcesses = getArray(details, 'suspicious_list');
+    const fallbackProcesses = getArray(details, 'processes');
+    const processes = previewRows(suspiciousProcesses.length > 0 ? suspiciousProcesses : fallbackProcesses);
+    const services = previewRows(getTextArray(details, 'services'));
     const sections: FindingSection[] = [];
 
     if (processes.length > 0) {
@@ -293,7 +299,7 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   }
 
   if (result.module_name === 'docker') {
-    const containers = getArray(details, 'containers').slice(0, 12);
+    const containers = previewRows(getArray(details, 'containers'));
     if (containers.length === 0) return [];
 
     return [
@@ -317,8 +323,8 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   if (result.module_name === 'panel') {
     const detectedInstalls = getArray(details, 'detected_installs');
     const fallbackInstalls = getArray(details, 'installs').filter((item) => readBool(item, 'detected'));
-    const panels = (detectedInstalls.length > 0 ? detectedInstalls : fallbackInstalls).slice(0, 8);
-    const sites = getArray(details, 'iis_sites').slice(0, 8);
+    const panels = previewRows(detectedInstalls.length > 0 ? detectedInstalls : fallbackInstalls);
+    const sites = previewRows(getArray(details, 'iis_sites'));
     const sections: FindingSection[] = [];
 
     if (panels.length > 0) {
@@ -357,7 +363,7 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   }
 
   if (result.module_name === 'cron') {
-    const tasks = getArray(details, 'suspicious_tasks').concat(getArray(details, 'tasks')).slice(0, 10);
+    const tasks = previewRows(getArray(details, 'suspicious_tasks').concat(getArray(details, 'tasks')));
     if (tasks.length === 0) return [];
 
     return [
@@ -382,14 +388,14 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   if (result.module_name === 'persistence') {
     const entries = getArray(details, 'suspicious_entries')
       .concat(getArray(details, 'suspicious_items'))
-      .concat(getArray(details, 'entries'))
-      .slice(0, 12);
+      .concat(getArray(details, 'entries'));
+    const entriesPreview = previewRows(entries);
     if (entries.length === 0) return [];
 
     return [
       {
         title: '持久化项',
-        rows: entries.map((entry, index) => ({
+        rows: entriesPreview.map((entry, index) => ({
           key: `persistence-${index}`,
           title: readField(entry, ['name', 'Name']),
           subtitle: readField(entry, ['detail', 'command', 'PathName']),
@@ -406,8 +412,8 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   }
 
   if (result.module_name === 'startup') {
-    const items = getArray(details, 'suspicious_items').concat(getArray(details, 'startup_items')).slice(0, 12);
-    const tasks = getArray(details, 'scheduled_tasks').slice(0, 8);
+    const items = previewRows(getArray(details, 'suspicious_items').concat(getArray(details, 'startup_items')));
+    const tasks = previewRows(getArray(details, 'scheduled_tasks'));
     const sections: FindingSection[] = [];
 
     if (items.length > 0) {
@@ -447,8 +453,8 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   }
 
   if (result.module_name === 'database') {
-    const detected = getTextArray(details, 'detected_databases').slice(0, 12);
-    const services = getArray(details, 'detected_services').concat(getArray(details, 'services')).slice(0, 12);
+    const detected = previewRows(getTextArray(details, 'detected_databases'));
+    const services = previewRows(getArray(details, 'detected_services').concat(getArray(details, 'services')));
 
     if (detected.length > 0) {
       return [
@@ -483,10 +489,9 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   }
 
   if (result.module_name === 'security_events') {
-    const events = getArray(details, 'suspicious_events')
+    const events = previewRows(getArray(details, 'suspicious_events')
       .concat(getArray(details, 'failed_logins'))
-      .concat(getArray(details, 'events'))
-      .slice(0, 12);
+      .concat(getArray(details, 'events')));
     if (events.length === 0) return [];
 
     return [
@@ -508,9 +513,90 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
     ];
   }
 
+  if (result.module_name === 'security_posture') {
+    const findings = previewRows(getArray(details, 'findings'));
+    const firewallProfiles = previewRows(getArray(details, 'firewall_profiles'));
+    const hostsEntries = previewRows(getArray(details, 'hosts_entries')
+      .filter((entry) => readBool(entry, 'suspicious')));
+    const rdp = isRecord(details.rdp) ? details.rdp : {};
+    const sections: FindingSection[] = [];
+
+    if (findings.length > 0) {
+      sections.push({
+        title: '安全状态关注项',
+        rows: findings.map((finding, index) => ({
+          key: `security-posture-finding-${index}`,
+          title: readField(finding, ['name', 'Name']),
+          subtitle: readField(finding, ['detail', 'Detail']),
+          risk: readField(finding, ['risk', 'Risk']) !== 'info',
+          reason: readField(finding, ['category', 'Category']),
+          fields: [
+            { label: '分类', value: readField(finding, ['category', 'Category']) },
+            { label: '风险', value: readField(finding, ['risk', 'Risk']) },
+          ],
+        })),
+      });
+    }
+
+    if (firewallProfiles.length > 0) {
+      sections.push({
+        title: 'Windows 防火墙',
+        rows: firewallProfiles.map((profile, index) => ({
+          key: `security-posture-firewall-${index}`,
+          title: readField(profile, ['Name', 'name']),
+          subtitle: `入站 ${readField(profile, ['DefaultInboundAction', 'default_inbound_action'])} / 出站 ${readField(profile, ['DefaultOutboundAction', 'default_outbound_action'])}`,
+          risk: readBool(profile, 'Enabled') === false,
+          fields: [
+            { label: '启用', value: readField(profile, ['Enabled', 'enabled']) },
+            { label: '默认入站', value: readField(profile, ['DefaultInboundAction', 'default_inbound_action']) },
+            { label: '默认出站', value: readField(profile, ['DefaultOutboundAction', 'default_outbound_action']) },
+          ],
+        })),
+      });
+    }
+
+    if (isRecord(rdp) && Object.keys(rdp).length > 0) {
+      sections.push({
+        title: '远程访问',
+        rows: [
+          {
+            key: 'security-posture-rdp',
+            title: '远程桌面',
+            subtitle: readBool(rdp, 'Enabled') ? 'RDP 已开启' : 'RDP 未开启',
+            risk: readBool(rdp, 'Enabled'),
+            fields: [
+              { label: '启用', value: readField(rdp, ['Enabled', 'enabled']) },
+              { label: '服务状态', value: readField(rdp, ['ServiceStatus', 'service_status']) },
+              { label: '启动类型', value: readField(rdp, ['ServiceStartType', 'service_start_type']) },
+            ],
+          },
+        ],
+      });
+    }
+
+    if (hostsEntries.length > 0) {
+      sections.push({
+        title: 'hosts 文件',
+        rows: hostsEntries.map((entry, index) => ({
+          key: `security-posture-hosts-${index}`,
+          title: readField(entry, ['hostname', 'Hostname']),
+          subtitle: readField(entry, ['line', 'Line']),
+          risk: true,
+          reason: readField(entry, ['reason', 'Reason']),
+          fields: [
+            { label: '地址', value: readField(entry, ['address', 'Address']) },
+            { label: '原因', value: readField(entry, ['reason', 'Reason']) },
+          ],
+        })),
+      });
+    }
+
+    return sections;
+  }
+
   if (result.module_name === 'file_scan') {
-    const files = getTextArray(details, 'recent_temp_files').slice(0, 12);
-    const findings = getArray(details, 'findings').concat(getArray(details, 'files')).slice(0, 12);
+    const files = previewRows(getTextArray(details, 'recent_temp_files'));
+    const findings = previewRows(getArray(details, 'findings').concat(getArray(details, 'files')));
     const tempDir = valueToText(details.temp_dir, '-');
 
     if (files.length > 0) {
@@ -639,27 +725,13 @@ export default function Results({ results = [] }: ResultsProps) {
 
   return (
     <div className="scan-results-workspace">
-      <div className="scan-results-header">
-        <div>
-          <Text className="scan-eyebrow">扫描结果</Text>
-          <Title level={3} className="scan-title">
-            应急扫描结果
-          </Title>
-          <Text className="scan-subtitle">
-            汇总本机快速扫描输出，先看处置优先级，再按模块核对关键明细和原始结构化数据。
-          </Text>
-        </div>
-        <div className={`scan-results-posture ${priorityCount > 0 ? 'attention' : 'steady'}`}>
-          <Text>{priorityLabel}</Text>
-          <strong>{priorityCount}</strong>
-          <span>高优先级</span>
-        </div>
-      </div>
-
       <div className="scan-results-commandbar" aria-label="结果统计">
         <div className="scan-results-commandbar-title">
-          <Text className="scan-panel-kicker">处置优先级</Text>
-          <strong>{priorityLabel}</strong>
+          <Text className="scan-eyebrow">扫描结果</Text>
+          <strong>应急扫描结果</strong>
+          <Text type="secondary">
+            {scanModuleCatalog.length} 个本机分析模块 · {scopeText}
+          </Text>
         </div>
         <div className="scan-stat-grid">
           {statItems.map((item) => (
@@ -672,85 +744,45 @@ export default function Results({ results = [] }: ResultsProps) {
             </div>
           ))}
         </div>
+        <div className={`scan-disposition-chip ${priorityCount > 0 ? 'attention' : 'steady'}`}>
+          <Text>处置</Text>
+          <strong>{priorityLabel}</strong>
+        </div>
         <Button icon={<ExportOutlined />} onClick={exportResults}>
           导出 JSON
         </Button>
       </div>
 
-      <section className="scan-results-scope-strip" aria-label="快速扫描覆盖范围">
-        <div>
-          <Text className="scan-panel-kicker">快速扫描覆盖范围</Text>
-          <strong>{scanModuleCatalog.length} 个本机分析模块</strong>
-        </div>
-        <Text type="secondary">
-          {scopeText}。本页仅展示本次勾选并完成采集的模块结果。
-        </Text>
-      </section>
-
-      <section className="scan-results-priority-panel" aria-label="处置优先级">
-        <div className="scan-results-summary-copy">
-          <Text className="scan-panel-kicker">处置优先级</Text>
-          <strong>{priorityCount > 0 ? '存在需要优先处置的发现' : '未发现高优先级风险'}</strong>
-          <Text type="secondary">
-            {priorityCount > 0
-              ? '优先查看危险与告警模块，再展开原始数据核对证据。'
-              : '当前结果以正常和信息项为主，可按模块继续抽查细节。'}
-          </Text>
-        </div>
-        <div className="scan-results-summary-metrics">
-          <div>
-            <Text>高优先级</Text>
-            <strong>{priorityCount}</strong>
-          </div>
-          <div>
-            <Text>已完成模块</Text>
-            <strong>{statusStats.total}</strong>
-          </div>
-          <div>
-            <Text>当前查看</Text>
-            <strong>{selectedModulePosition || '-'}</strong>
-          </div>
-        </div>
-      </section>
-
-      <div className="scan-results-layout scan-results-detail-grid">
-        <aside className="scan-results-sidebar">
-          <div className="scan-sidebar-head">
-            <div>
-              <Text className="scan-panel-kicker">模块队列</Text>
-              <strong>{results.length} 个模块</strong>
-            </div>
-            <Tag color={priorityCount > 0 ? 'warning' : 'success'}>{priorityCount > 0 ? '需复核' : '已归档'}</Tag>
-          </div>
+      <div className="scan-results-soc-shell scan-results-detail-grid">
+        <div className="scan-module-strip" role="tablist" aria-label="扫描模块">
           {results.map((item, index) => {
             const meta = getScanStatusMeta(item.status);
             return (
-            <button
-              key={item.module_name}
-              className={`scan-result-nav-item ${meta.tone} ${selectedModule === item.module_name ? 'active' : ''}`}
-              onClick={() => setSelectedModule(item.module_name)}
-              type="button"
-            >
-              <span className="scan-result-nav-index">{String(index + 1).padStart(2, '0')}</span>
-              <span className="scan-result-nav-main">
-                <strong>{getScanModuleLabel(item.module_name)}</strong>
-                <code>{item.module_name}</code>
-                <Paragraph ellipsis={{ rows: 2 }} type="secondary">
-                  {item.summary}
-                </Paragraph>
-              </span>
-              <Tag color={meta.color}>{meta.label}</Tag>
-            </button>
+              <button
+                key={item.module_name}
+                aria-selected={selectedModule === item.module_name}
+                className={`scan-result-nav-item ${meta.tone} ${selectedModule === item.module_name ? 'active' : ''}`}
+                onClick={() => setSelectedModule(item.module_name)}
+                role="tab"
+                type="button"
+              >
+                <span className="scan-result-nav-index">{String(index + 1).padStart(2, '0')}</span>
+                <span className="scan-result-nav-main">
+                  <strong>{getScanModuleLabel(item.module_name)}</strong>
+                  <code>{item.module_name}</code>
+                </span>
+                <Tag color={meta.color}>{meta.label}</Tag>
+              </button>
             );
           })}
-        </aside>
+        </div>
 
-        <main className="scan-result-detail">
+        <main className="scan-result-detail scan-result-detail-panel">
           {selectedResult ? (
-            <div className="scan-selected-module-card">
+            <div className="scan-detail-surface">
               <div className="scan-detail-header">
                 <div>
-                  <Text className="scan-panel-kicker">已选模块</Text>
+                  <Text className="scan-panel-kicker">当前模块</Text>
                   <Title level={4}>{getScanModuleLabel(selectedResult.module_name)}</Title>
                   <Text type="secondary">{selectedResult.module_name}</Text>
                 </div>
@@ -771,9 +803,9 @@ export default function Results({ results = [] }: ResultsProps) {
                   {selectedFindingSections.map((section) => (
                     <div className="scan-finding-section" key={section.title}>
                       <Text strong>{section.title}</Text>
-                      <div className="scan-finding-list">
+                      <div className="scan-finding-table">
                         {section.rows.map((row) => (
-                          <article className={`scan-finding-row ${row.risk ? 'risk' : ''}`} key={row.key}>
+                          <article className={`scan-finding-record ${row.risk ? 'risk' : ''}`} key={row.key}>
                             <div className="scan-finding-row-head">
                               <div>
                                 <Text strong>{row.title}</Text>
@@ -781,10 +813,10 @@ export default function Results({ results = [] }: ResultsProps) {
                               </div>
                               {row.risk ? <Tag color="warning">可疑</Tag> : null}
                             </div>
-                            {row.risk && row.reason && row.reason !== '-' ? (
-                              <Tag color="orange">{row.reason}</Tag>
-                            ) : null}
                             <div className="scan-finding-fields">
+                              {row.risk && row.reason && row.reason !== '-' ? (
+                                <Tag className="scan-finding-reason-tag">{row.reason}</Tag>
+                              ) : null}
                               {row.fields.map((field) => (
                                 <Tag key={`${row.key}-${field.label}`}>
                                   {field.label}: {field.value}
@@ -804,7 +836,7 @@ export default function Results({ results = [] }: ResultsProps) {
                 </section>
               )}
 
-              <details className="scan-raw-data" open>
+              <details className="scan-raw-data">
                 <summary>
                   <span>原始数据</span>
                   <Tag color={statusColor(selectedResult.status)}>{statusText(selectedResult.status)}</Tag>

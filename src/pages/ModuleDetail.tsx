@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Card, Row, Col, Progress, Typography, Descriptions, Spin, Table, Tag, List, Input, Button, Space, Statistic, Checkbox, Popover, Dropdown, Modal, Select, Upload, message, Empty, Tabs, Switch, Alert, Collapse } from 'antd';
 import { invoke } from '@tauri-apps/api/core';
-import { ReloadOutlined, UserOutlined, ApiOutlined, DatabaseOutlined, DesktopOutlined, SettingOutlined, DownloadOutlined, EyeOutlined, NumberOutlined, UploadOutlined, MoreOutlined, SearchOutlined, FileSearchOutlined } from '@ant-design/icons';
+import { ReloadOutlined, UserOutlined, ApiOutlined, DatabaseOutlined, DesktopOutlined, SettingOutlined, DownloadOutlined, EyeOutlined, NumberOutlined, UploadOutlined, MoreOutlined, SearchOutlined, FileSearchOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile, exists } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
@@ -67,6 +67,29 @@ interface WindowsDatabaseMutationCommandResult {
     exit_code?: number;
 }
 
+interface WindowsCollectionArtifact {
+    path: string;
+    totalCount: number;
+    previewCount: number;
+    format: string;
+}
+
+const WINDOWS_EVENT_LOG_PREVIEW_LIMIT = 500;
+
+const windowsEventLogModuleNames: Record<string, string> = {
+    win_security_log: 'Security',
+    win_system_log: 'System',
+    win_app_log: 'Application',
+    win_powershell_log: 'Windows PowerShell',
+};
+
+const windowsLogTimeRangeStartExpressions: Record<string, string> = {
+    '1h': '(Get-Date).AddHours(-1)',
+    '6h': '(Get-Date).AddHours(-6)',
+    '24h': '(Get-Date).AddDays(-1)',
+    '3d': '(Get-Date).AddDays(-3)',
+};
+
 const WINDOWS_DATABASE_DEFAULT_PORTS: Record<WindowsDatabaseEngine, number> = {
     mysql: 3306,
     sqlserver: 1433,
@@ -79,6 +102,54 @@ const toRecord = (value: unknown): Record<string, unknown> =>
 const normalizeCell = (value: unknown): string => {
     if (value === null || value === undefined) return '';
     return String(value).trim();
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const readArtifactPreview = (value: unknown): { rows: any[]; artifact: WindowsCollectionArtifact | null; previewLimit: number | null } => {
+    if (isRecord(value) && Array.isArray(value.preview)) {
+        const artifactPath = value.artifactPath ?? value.ArtifactPath;
+        const previewLimit = Number(value.previewLimit ?? value.PreviewLimit);
+        const rows = value.preview;
+
+        if (!artifactPath) {
+            return {
+                rows,
+                artifact: null,
+                previewLimit: Number.isFinite(previewLimit) ? previewLimit : null,
+            };
+        }
+
+        const totalCount = Number(value.totalCount ?? value.TotalCount ?? rows.length);
+        return {
+            rows,
+            artifact: {
+                path: String(artifactPath),
+                totalCount: Number.isFinite(totalCount) ? totalCount : rows.length,
+                previewCount: rows.length,
+                format: String(value.format ?? value.Format ?? 'csv'),
+            },
+            previewLimit: Number.isFinite(previewLimit) ? previewLimit : null,
+        };
+    }
+
+    if (!isRecord(value) || !value.artifactPath) {
+        return { rows: Array.isArray(value) ? value : [value], artifact: null, previewLimit: null };
+    }
+
+    const preview = Array.isArray(value.preview) ? value.preview : [];
+    const totalCount = Number(value.totalCount ?? preview.length);
+    return {
+        rows: preview,
+        artifact: {
+            path: String(value.artifactPath),
+            totalCount: Number.isFinite(totalCount) ? totalCount : preview.length,
+            previewCount: preview.length,
+            format: String(value.format ?? 'csv'),
+        },
+        previewLimit: null,
+    };
 };
 
 const parseWindowsDatabasePort = (value: unknown): number | null => {
@@ -1109,10 +1180,10 @@ const remoteCommands: Record<string, string> = {
     selinux_status: 'sestatus 2>/dev/null || aa-status 2>/dev/null || cat /etc/selinux/config 2>/dev/null | grep "^SELINUX=" || echo "SELinux/AppArmor 未启用"',
     process_anomaly: `echo "===HIDDEN===" && ps -ef | awk '{print $2}' | sort -n > /tmp/ps_pids && ls /proc | grep -E '^[0-9]+$' | sort -n > /tmp/proc_pids && diff /tmp/ps_pids /tmp/proc_pids | grep ">" | awk '{print $2}' && rm /tmp/ps_pids /tmp/proc_pids && echo "===DELETED===" && ls -al /proc/*/exe 2>/dev/null | grep "deleted" | awk '{print $11, $1, $3}' && echo "===SENSITIVE_PATH===" && ps auxww | grep -E "/tmp/|/dev/shm/|/var/tmp/" | grep -v grep | awk '{print $2, $1, $11}' && echo "===HIGH_RESOURCES===" && ps aux --sort=-%cpu | head -6`,
     // Windows 专用命令 (PowerShell)
-    win_security_log: 'try { Get-WinEvent -LogName Security -MaxEvents 100 | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[需要管理员权限] 请以管理员身份运行程序来查看安全日志" }',
-    win_system_log: 'try { Get-WinEvent -LogName System -MaxEvents 100 | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
-    win_app_log: 'try { Get-WinEvent -LogName Application -MaxEvents 100 | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
-    win_powershell_log: 'try { Get-WinEvent -LogName "Windows PowerShell" -MaxEvents 100 | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
+    win_security_log: 'try { Get-WinEvent -LogName Security | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[需要管理员权限] 请以管理员身份运行程序来查看安全日志" }',
+    win_system_log: 'try { Get-WinEvent -LogName System | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
+    win_app_log: 'try { Get-WinEvent -LogName Application | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
+    win_powershell_log: 'try { Get-WinEvent -LogName "Windows PowerShell" | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
     win_firewall: 'netsh advfirewall show allprofiles',
     registry: 'powershell -Command "echo ===HKLM_RUN===; Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run 2>$null; echo ===HKCU_RUN===; Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run 2>$null"',
 };
@@ -1296,11 +1367,11 @@ export const windowsLocalCommands: Record<string, string> = {
     env_vars: 'powershell.exe -NoProfile -Command "$vars = [Environment]::GetEnvironmentVariables(); $vars.Keys | Sort-Object | ForEach-Object { [pscustomobject]@{ Name=[string]$_; Value=[string]$vars[$_] } } | ConvertTo-Json -Compress -Depth 3"',
     file_scan: `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$tempRoots = @($env:TEMP, (Join-Path $env:WINDIR 'Temp')) | Where-Object { $_ -and (Test-Path $_) }; function Emit($name, $items) { Write-Output ('===' + $name + '==='); @($items) | ConvertTo-Json -Compress -Depth 4 }; $recentTemp = @(Get-ChildItem -LiteralPath $tempRoots -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-1) } | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension); Emit 'RECENT_TEMP' $recentTemp; $execRoots = @((Join-Path $env:PUBLIC 'Downloads'), (Join-Path $env:USERPROFILE 'Downloads'), $env:APPDATA, (Join-Path $env:LOCALAPPDATA 'Temp')) | Where-Object { $_ -and (Test-Path $_) }; $executables = @(Get-ChildItem -LiteralPath $execRoots -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension); Emit 'USER_WRITABLE_EXECUTABLES' $executables; $webRoots = @('C:\\inetpub\\wwwroot','C:\\phpstudy_pro\\WWW','C:\\xampp\\htdocs','C:\\wamp64\\www','C:\\BtSoft\\WebSites') | Where-Object { Test-Path $_ }; $webFiles = @(Get-ChildItem -LiteralPath $webRoots -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Extension -match '^\\.(php|asp|aspx|jsp|jspx|js|config)$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension); Emit 'RECENT_WEBROOT' $webFiles"`,
     suspicious_files: `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$roots = @($env:TEMP, (Join-Path $env:WINDIR 'Temp'), (Join-Path $env:USERPROFILE 'Downloads'), $env:APPDATA, $env:LOCALAPPDATA) | Where-Object { $_ -and (Test-Path $_) }; Write-Output '===RECENT_TEMP==='; Get-ChildItem -LiteralPath @($env:TEMP, (Join-Path $env:WINDIR 'Temp')) -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-1) } | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===TEMP_EXE==='; Get-ChildItem -LiteralPath @($env:TEMP, (Join-Path $env:WINDIR 'Temp')) -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' } | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===HIDDEN_EXE==='; Get-ChildItem -LiteralPath $roots -File -Force -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Attributes -band [IO.FileAttributes]::Hidden -and $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' } | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===RECENT_MODIFIED==='; Get-ChildItem -LiteralPath @((Join-Path $env:USERPROFILE 'Downloads'), $env:APPDATA, $env:LOCALAPPDATA) -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 120 -ExpandProperty FullName"`,
-    security_events: `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ids = @(4624,4625,4648,4672,4720,4722,4724,4725,4726,4728,4732,4738,4740,4776); try { @(Get-WinEvent -FilterHashtable @{LogName='Security'; ID=$ids} -MaxEvents 100 -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $eventType = switch ($_.Id) { 4624 { 'Logon success' } 4625 { 'Failed logon' } 4648 { 'Explicit credentials logon' } 4672 { 'Special privileges assigned' } 4720 { 'User created' } 4722 { 'User enabled' } 4724 { 'Password reset' } 4725 { 'User disabled' } 4726 { 'User deleted' } 4728 { 'Added to security group' } 4732 { 'Added to local group' } 4738 { 'User account changed' } 4740 { 'Account locked' } 4776 { 'Credential validation' } default { 'Security event' } }; $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] }; $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] }; $logonType = ''; if ($msg -match 'Logon Type:\\s+(\\d+)') { $logonType = $Matches[1] }; $status = ''; if ($msg -match 'Status:\\s+([^\\s]+)') { $status = $Matches[1] }; [pscustomobject]@{ EventId=$_.Id; TimeCreated=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); EventType=$eventType; Description=$msg.Substring(0, [Math]::Min(220, $msg.Length)); Username=$user; SourceIp=$ip; LogonType=$logonType; Status=$status; Suspicious=($_.Id -in @(4625,4672,4720,4726,4740)) } }) | ConvertTo-Json -Compress -Depth 4 } catch { [pscustomobject]@{ EventId='error'; TimeCreated=''; EventType='Error'; Description=$_.Exception.Message; Username=''; SourceIp=''; LogonType=''; Status=''; Suspicious=$true } | ConvertTo-Json -Compress -Depth 4 }"`,
-    win_security_log: 'try { Get-WinEvent -LogName Security -MaxEvents 50 | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[需要管理员权限] 请以管理员身份运行程序来查看安全日志" }',
-    win_system_log: 'try { Get-WinEvent -LogName System -MaxEvents 50 | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
-    win_app_log: 'try { Get-WinEvent -LogName Application -MaxEvents 50 | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
-    win_powershell_log: 'try { Get-WinEvent -LogName "Windows PowerShell" -MaxEvents 50 | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
+    security_events: `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ids = @(4624,4625,4648,4672,4720,4722,4724,4725,4726,4728,4732,4738,4740,4776); try { @(Get-WinEvent -FilterHashtable @{LogName='Security'; ID=$ids} -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $eventType = switch ($_.Id) { 4624 { 'Logon success' } 4625 { 'Failed logon' } 4648 { 'Explicit credentials logon' } 4672 { 'Special privileges assigned' } 4720 { 'User created' } 4722 { 'User enabled' } 4724 { 'Password reset' } 4725 { 'User disabled' } 4726 { 'User deleted' } 4728 { 'Added to security group' } 4732 { 'Added to local group' } 4738 { 'User account changed' } 4740 { 'Account locked' } 4776 { 'Credential validation' } default { 'Security event' } }; $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] }; $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] }; $logonType = ''; if ($msg -match 'Logon Type:\\s+(\\d+)') { $logonType = $Matches[1] }; $status = ''; if ($msg -match 'Status:\\s+([^\\s]+)') { $status = $Matches[1] }; [pscustomobject]@{ EventId=$_.Id; TimeCreated=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); EventType=$eventType; Description=$msg.Substring(0, [Math]::Min(220, $msg.Length)); Username=$user; SourceIp=$ip; LogonType=$logonType; Status=$status; Suspicious=($_.Id -in @(4625,4672,4720,4726,4740)) } }) | ConvertTo-Json -Compress -Depth 4 } catch { [pscustomobject]@{ EventId='error'; TimeCreated=''; EventType='Error'; Description=$_.Exception.Message; Username=''; SourceIp=''; LogonType=''; Status=''; Suspicious=$true } | ConvertTo-Json -Compress -Depth 4 }"`,
+    win_security_log: 'try { Get-WinEvent -LogName Security | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[需要管理员权限] 请以管理员身份运行程序来查看安全日志" }',
+    win_system_log: 'try { Get-WinEvent -LogName System | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
+    win_app_log: 'try { Get-WinEvent -LogName Application | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
+    win_powershell_log: 'try { Get-WinEvent -LogName "Windows PowerShell" | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "`n", " " -replace "`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[错误] $_" }',
     win_firewall: 'netsh advfirewall show allprofiles',
     registry: 'powershell -Command "echo ===HKLM_RUN===; Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run | Select-Object * -ExcludeProperty PS* | ConvertTo-Json -Compress; echo ===HKCU_RUN===; Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run | Select-Object * -ExcludeProperty PS* | ConvertTo-Json -Compress"',
     win_defender: 'powershell -Command "try { Get-MpComputerStatus | Select-Object AntivirusEnabled,AMServiceEnabled,AntispywareEnabled,BehaviorMonitorEnabled,IoavProtectionEnabled,OnAccessProtectionEnabled,RealTimeProtectionEnabled,AntivirusSignatureLastUpdated | ConvertTo-Json -Compress } catch { echo @{error=\"需要管理员权限或Defender未运行\"} | ConvertTo-Json -Compress }"',
@@ -1440,7 +1511,7 @@ windowsLocalCommands.powershell_deep = buildWindowsPowerShellCommand(`
 $rows = New-Object System.Collections.ArrayList;
 function Add-Row { param($category,$source,$name,$path,$time,$detail,$risk='info',$status='',$eventId='',$user='',$ip=''); [void]$rows.Add([pscustomobject]@{ category=[string]$category; source=[string]$source; name=[string]$name; path=[string]$path; time=[string]$time; detail=[string]$detail; risk=[string]$risk; status=[string]$status; eventId=[string]$eventId; user=[string]$user; ip=[string]$ip }) }
 $ids = @(4103,4104,400,403,600,800);
-foreach ($channel in @('Microsoft-Windows-PowerShell/Operational','Windows PowerShell')) { try { Get-WinEvent -FilterHashtable @{LogName=$channel; Id=$ids} -MaxEvents 120 -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $risk = if ($_.Id -eq 4104 -and $msg -match '(FromBase64String|DownloadString|IEX|Invoke-Expression|EncodedCommand|Net.WebClient)') { 'high' } elseif ($_.Id -in @(4103,4104)) { 'warning' } else { 'info' }; Add-Row 'PowerShell Deep' $channel ('Event ' + $_.Id) $channel $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') $msg.Substring(0, [Math]::Min(500, $msg.Length)) $risk 'Event' $_.Id } } catch { Add-Row 'PowerShell Deep' $channel 'Event query' $channel '' $_.Exception.Message 'info' 'Unavailable' } };
+foreach ($channel in @('Microsoft-Windows-PowerShell/Operational','Windows PowerShell')) { try { Get-WinEvent -FilterHashtable @{LogName=$channel; Id=$ids} -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $risk = if ($_.Id -eq 4104 -and $msg -match '(FromBase64String|DownloadString|IEX|Invoke-Expression|EncodedCommand|Net.WebClient)') { 'high' } elseif ($_.Id -in @(4103,4104)) { 'warning' } else { 'info' }; Add-Row 'PowerShell Deep' $channel ('Event ' + $_.Id) $channel $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') $msg.Substring(0, [Math]::Min(500, $msg.Length)) $risk 'Event' $_.Id } } catch { Add-Row 'PowerShell Deep' $channel 'Event query' $channel '' $_.Exception.Message 'info' 'Unavailable' } };
 $historyCandidates = @();
 try { $option = Get-PSReadLineOption -ErrorAction Stop; if ($option.HistorySavePath) { $historyCandidates += $option.HistorySavePath } } catch {};
 if ($env:APPDATA) { $historyCandidates += (Join-Path $env:APPDATA 'Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt') };
@@ -1460,9 +1531,9 @@ $rows | ConvertTo-Json -Compress -Depth 5
 windowsLocalCommands.rdp_logon_trace = buildWindowsPowerShellCommand(`
 $rows = New-Object System.Collections.ArrayList;
 function Add-Row { param($category,$source,$name,$path,$time,$detail,$risk='info',$status='',$eventId='',$user='',$ip=''); [void]$rows.Add([pscustomobject]@{ category=[string]$category; source=[string]$source; name=[string]$name; path=[string]$path; time=[string]$time; detail=[string]$detail; risk=[string]$risk; status=[string]$status; eventId=[string]$eventId; user=[string]$user; ip=[string]$ip }) }
-try { Get-WinEvent -FilterHashtable @{LogName='Security'; Id=@(4624,4625)} -MaxEvents 160 -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] }; $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] }; $logonType = ''; if ($msg -match 'Logon Type:\\s+(\\d+)') { $logonType = $Matches[1] }; $risk = if ($_.Id -eq 4625) { 'warning' } elseif ($logonType -eq '10') { 'warning' } else { 'info' }; Add-Row 'RDP Logon Trace' 'Security' ('Event ' + $_.Id + ' LogonType ' + $logonType) 'Security' $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') $msg.Substring(0, [Math]::Min(500, $msg.Length)) $risk $logonType $_.Id $user $ip } } catch { Add-Row 'RDP Logon Trace' 'Security' '4624/4625 query failed' 'Security' '' $_.Exception.Message 'warning' 'Error' };
+try { Get-WinEvent -FilterHashtable @{LogName='Security'; Id=@(4624,4625)} -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] }; $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] }; $logonType = ''; if ($msg -match 'Logon Type:\\s+(\\d+)') { $logonType = $Matches[1] }; $risk = if ($_.Id -eq 4625) { 'warning' } elseif ($logonType -eq '10') { 'warning' } else { 'info' }; Add-Row 'RDP Logon Trace' 'Security' ('Event ' + $_.Id + ' LogonType ' + $logonType) 'Security' $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') $msg.Substring(0, [Math]::Min(500, $msg.Length)) $risk $logonType $_.Id $user $ip } } catch { Add-Row 'RDP Logon Trace' 'Security' '4624/4625 query failed' 'Security' '' $_.Exception.Message 'warning' 'Error' };
 $channels = @(@{Name='Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational'; Id=@(1149)}, @{Name='Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Id=@(21,24,25,40)});
-foreach ($channel in $channels) { try { Get-WinEvent -FilterHashtable @{LogName=$channel.Name; Id=$channel.Id} -MaxEvents 120 -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); Add-Row 'RDP Logon Trace' 'TerminalServices' ('Event ' + $_.Id) $channel.Name $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') $msg.Substring(0, [Math]::Min(500, $msg.Length)) 'warning' 'Event' $_.Id } } catch { Add-Row 'RDP Logon Trace' 'TerminalServices' 'Channel query failed' $channel.Name '' $_.Exception.Message 'info' 'Unavailable' } };
+foreach ($channel in $channels) { try { Get-WinEvent -FilterHashtable @{LogName=$channel.Name; Id=$channel.Id} -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); Add-Row 'RDP Logon Trace' 'TerminalServices' ('Event ' + $_.Id) $channel.Name $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') $msg.Substring(0, [Math]::Min(500, $msg.Length)) 'warning' 'Event' $_.Id } } catch { Add-Row 'RDP Logon Trace' 'TerminalServices' 'Channel query failed' $channel.Name '' $_.Exception.Message 'info' 'Unavailable' } };
 $rows | ConvertTo-Json -Compress -Depth 5
 `);
 
@@ -1498,15 +1569,36 @@ $rows | ConvertTo-Json -Compress -Depth 5
 
 windowsLocalCommands.browser = `powershell.exe -NoProfile -Command "function Get-BrowserProfiles($browser, $root) { if (-not (Test-Path $root)) { return @() }; @(Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' -or $browser -eq 'Firefox' } | ForEach-Object { $history = if ($browser -eq 'Firefox') { Join-Path $_.FullName 'places.sqlite' } else { Join-Path $_.FullName 'History' }; [pscustomobject]@{ Browser=$browser; Profile=$_.Name; Path=$_.FullName; LastWriteTime=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'); HistoryPath=if (Test-Path $history) { $history } else { '' }; HistoryLastWriteTime=if (Test-Path $history) { (Get-Item $history).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' } } }) }; echo ===CHROME===; @(Get-BrowserProfiles 'Chrome' (Join-Path $env:LOCALAPPDATA 'Google\\Chrome\\User Data')) | ConvertTo-Json -Compress -Depth 4; echo ===EDGE===; @(Get-BrowserProfiles 'Edge' (Join-Path $env:LOCALAPPDATA 'Microsoft\\Edge\\User Data')) | ConvertTo-Json -Compress -Depth 4; echo ===FIREFOX===; @(Get-BrowserProfiles 'Firefox' (Join-Path $env:APPDATA 'Mozilla\\Firefox\\Profiles')) | ConvertTo-Json -Compress -Depth 4"`;
 
-function buildWindowsEventLogCommand(logName: string): string {
-    return `powershell.exe -NoProfile -Command "try { @(Get-WinEvent -LogName '${logName}' -MaxEvents 50 -ErrorAction Stop | Select-Object @{N='time';E={$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')}}, @{N='id';E={$_.Id}}, @{N='message';E={ $msg = ($_.Message -replace '[\\r\\n]+', ' '); $msg.Substring(0, [Math]::Min(150, $msg.Length)) }}) | ConvertTo-Json -Compress -Depth 4 } catch { [pscustomobject]@{ error=$_.Exception.Message } | ConvertTo-Json -Compress -Depth 4 }"`;
+function buildWindowsEventLogCommand(logName: string, startTimeExpression?: string): string {
+    const filter = startTimeExpression
+        ? `@{LogName='${logName}'; StartTime=${startTimeExpression}}`
+        : `@{LogName='${logName}'}`;
+
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $rows=@(Get-WinEvent -FilterHashtable ${filter} -MaxEvents ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT} -ErrorAction Stop | ForEach-Object { $msg=($_.Message -replace '[\\r\\n]+', ' '); [pscustomobject]@{ time=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); id=$_.Id; message=$msg } }); [pscustomobject]@{ previewLimit=${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}; isPreview=$true; preview=@($rows); format='json' } | ConvertTo-Json -Compress -Depth 5 } catch { if ($_.Exception.Message -match 'No events were found') { [pscustomobject]@{ previewLimit=${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}; isPreview=$true; preview=@(); format='json' } | ConvertTo-Json -Compress -Depth 5 } else { [pscustomobject]@{ error=$_.Exception.Message } | ConvertTo-Json -Compress -Depth 4 } }"`;
+}
+
+function buildWindowsEventLogExportCommand(logName: string, startTimeExpression?: string): string {
+    const safeName = logName.replace(/[^A-Za-z0-9]+/g, '_');
+    const filter = startTimeExpression
+        ? `@{LogName='${logName}'; StartTime=${startTimeExpression}}`
+        : `@{LogName='${logName}'}`;
+
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $dir=Join-Path ([IO.Path]::GetTempPath()) 'Lumina-IR'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'; $path=Join-Path $dir ('${safeName}-' + $stamp + '.csv'); $count=0; $preview=New-Object System.Collections.Generic.List[object]; try { Get-WinEvent -FilterHashtable ${filter} -ErrorAction Stop | ForEach-Object { $msg=($_.Message -replace '[\\r\\n]+', ' '); $row=[pscustomobject]@{ time=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); id=$_.Id; message=$msg }; if ($count -lt ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}) { [void]$preview.Add($row) }; $count++; $row } | Export-Csv -LiteralPath $path -NoTypeInformation -Encoding UTF8; [pscustomobject]@{ artifactPath=$path; totalCount=$count; preview=@($preview | Select-Object -First ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}); format='csv' } | ConvertTo-Json -Compress -Depth 5 } catch { if ($_.Exception.Message -match 'No events were found') { '' | Set-Content -LiteralPath $path -Encoding UTF8; [pscustomobject]@{ artifactPath=$path; totalCount=0; preview=@(); format='csv' } | ConvertTo-Json -Compress -Depth 5 } else { [pscustomobject]@{ error=$_.Exception.Message } | ConvertTo-Json -Compress -Depth 4 } }"`;
+}
+
+function buildWindowsSecurityEventsCommand(): string {
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ids = @(4624,4625,4648,4672,4720,4722,4724,4725,4726,4728,4732,4738,4740,4776); try { $rows=@(Get-WinEvent -FilterHashtable @{LogName='Security'; ID=$ids} -MaxEvents ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT} -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $eventType = switch ($_.Id) { 4624 { 'Logon success' } 4625 { 'Failed logon' } 4648 { 'Explicit credentials logon' } 4672 { 'Special privileges assigned' } 4720 { 'User created' } 4722 { 'User enabled' } 4724 { 'Password reset' } 4725 { 'User disabled' } 4726 { 'User deleted' } 4728 { 'Added to security group' } 4732 { 'Added to local group' } 4738 { 'User account changed' } 4740 { 'Account locked' } 4776 { 'Credential validation' } default { 'Security event' } }; $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] }; $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] }; $logonType = ''; if ($msg -match 'Logon Type:\\s+(\\d+)') { $logonType = $Matches[1] }; $status = ''; if ($msg -match 'Status:\\s+([^\\s]+)') { $status = $Matches[1] }; [pscustomobject]@{ EventId=$_.Id; TimeCreated=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); EventType=$eventType; Description=$msg; Username=$user; SourceIp=$ip; LogonType=$logonType; Status=$status; Suspicious=($_.Id -in @(4625,4672,4720,4726,4740)) } }); [pscustomobject]@{ previewLimit=${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}; isPreview=$true; preview=@($rows); format='json' } | ConvertTo-Json -Compress -Depth 5 } catch { if ($_.Exception.Message -match 'No events were found') { [pscustomobject]@{ previewLimit=${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}; isPreview=$true; preview=@(); format='json' } | ConvertTo-Json -Compress -Depth 5 } else { [pscustomobject]@{ EventId='error'; TimeCreated=''; EventType='Error'; Description=$_.Exception.Message; Username=''; SourceIp=''; LogonType=''; Status=''; Suspicious=$true } | ConvertTo-Json -Compress -Depth 4 } }"`;
+}
+
+function buildWindowsSecurityEventsExportCommand(): string {
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ids = @(4624,4625,4648,4672,4720,4722,4724,4725,4726,4728,4732,4738,4740,4776); $dir=Join-Path ([IO.Path]::GetTempPath()) 'Lumina-IR'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'; $path=Join-Path $dir ('security_events-' + $stamp + '.csv'); $count=0; $preview=New-Object System.Collections.Generic.List[object]; try { Get-WinEvent -FilterHashtable @{LogName='Security'; ID=$ids} -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $eventType = switch ($_.Id) { 4624 { 'Logon success' } 4625 { 'Failed logon' } 4648 { 'Explicit credentials logon' } 4672 { 'Special privileges assigned' } 4720 { 'User created' } 4722 { 'User enabled' } 4724 { 'Password reset' } 4725 { 'User disabled' } 4726 { 'User deleted' } 4728 { 'Added to security group' } 4732 { 'Added to local group' } 4738 { 'User account changed' } 4740 { 'Account locked' } 4776 { 'Credential validation' } default { 'Security event' } }; $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] }; $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] }; $logonType = ''; if ($msg -match 'Logon Type:\\s+(\\d+)') { $logonType = $Matches[1] }; $status = ''; if ($msg -match 'Status:\\s+([^\\s]+)') { $status = $Matches[1] }; $row=[pscustomobject]@{ EventId=$_.Id; TimeCreated=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); EventType=$eventType; Description=$msg; Username=$user; SourceIp=$ip; LogonType=$logonType; Status=$status; Suspicious=($_.Id -in @(4625,4672,4720,4726,4740)) }; if ($count -lt ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}) { [void]$preview.Add($row) }; $count++; $row } | Export-Csv -LiteralPath $path -NoTypeInformation -Encoding UTF8; [pscustomobject]@{ artifactPath=$path; totalCount=$count; preview=@($preview | Select-Object -First ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}); format='csv' } | ConvertTo-Json -Compress -Depth 5 } catch { if ($_.Exception.Message -match 'No events were found') { '' | Set-Content -LiteralPath $path -Encoding UTF8; [pscustomobject]@{ artifactPath=$path; totalCount=0; preview=@(); format='csv' } | ConvertTo-Json -Compress -Depth 5 } else { [pscustomobject]@{ EventId='error'; TimeCreated=''; EventType='Error'; Description=$_.Exception.Message; Username=''; SourceIp=''; LogonType=''; Status=''; Suspicious=$true } | ConvertTo-Json -Compress -Depth 4 } }"`;
 }
 
 windowsLocalCommands.win_security_log = buildWindowsEventLogCommand('Security');
 windowsLocalCommands.win_system_log = buildWindowsEventLogCommand('System');
 windowsLocalCommands.win_app_log = buildWindowsEventLogCommand('Application');
 windowsLocalCommands.win_powershell_log = buildWindowsEventLogCommand('Windows PowerShell');
-windowsLocalCommands.security_events = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ids = @(4624,4625,4648,4672,4720,4722,4724,4725,4726,4728,4732,4738,4740,4776); try { @(Get-WinEvent -FilterHashtable @{LogName='Security'; ID=$ids} -MaxEvents 100 -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $eventType = switch ($_.Id) { 4624 { 'Logon success' } 4625 { 'Failed logon' } 4648 { 'Explicit credentials logon' } 4672 { 'Special privileges assigned' } 4720 { 'User created' } 4722 { 'User enabled' } 4724 { 'Password reset' } 4725 { 'User disabled' } 4726 { 'User deleted' } 4728 { 'Added to security group' } 4732 { 'Added to local group' } 4738 { 'User account changed' } 4740 { 'Account locked' } 4776 { 'Credential validation' } default { 'Security event' } }; $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] }; $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] }; $logonType = ''; if ($msg -match 'Logon Type:\\s+(\\d+)') { $logonType = $Matches[1] }; $status = ''; if ($msg -match 'Status:\\s+([^\\s]+)') { $status = $Matches[1] }; [pscustomobject]@{ EventId=$_.Id; TimeCreated=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); EventType=$eventType; Description=$msg.Substring(0, [Math]::Min(220, $msg.Length)); Username=$user; SourceIp=$ip; LogonType=$logonType; Status=$status; Suspicious=($_.Id -in @(4625,4672,4720,4726,4740)) } }) | ConvertTo-Json -Compress -Depth 4 } catch { if ($_.Exception.Message -match 'No events were found') { Write-Output '[]' } else { [pscustomobject]@{ EventId='error'; TimeCreated=''; EventType='Error'; Description=$_.Exception.Message; Username=''; SourceIp=''; LogonType=''; Status=''; Suspicious=$true } | ConvertTo-Json -Compress -Depth 4 } }"`;
+windowsLocalCommands.security_events = buildWindowsSecurityEventsCommand();
 windowsLocalCommands.logged_users = `powershell.exe -NoProfile -Command "$rows = @(); $queryCmd = Get-Command quser.exe,query.exe -ErrorAction SilentlyContinue | Select-Object -First 1; $lines = @(); if ($queryCmd) { if ($queryCmd.Name -eq 'query.exe') { $lines = @(& $queryCmd.Source user 2>$null) } else { $lines = @(& $queryCmd.Source 2>$null) } }; if ($lines.Count -gt 0) { foreach ($line in ($lines | Select-Object -Skip 1)) { $clean = ($line -replace '^\\s*>', '').Trim(); if (-not $clean) { continue }; if ($clean -match '^(?<User>\\S+)\\s+(?:(?<SessionName>\\S+)\\s+)?(?<SessionId>\\d+)\\s+(?<State>\\S+)\\s+(?<IdleTime>\\S+)\\s+(?<LogonTime>.+)$') { $session = $Matches.SessionName; $source = if ($session -match 'rdp|tcp') { 'Remote' } else { 'Local' }; $logonType = if ($source -eq 'Remote') { 10 } else { 2 }; $rows += [pscustomobject]@{ User=$Matches.User; SessionName=$session; SessionId=[int]$Matches.SessionId; State=$Matches.State; IdleTime=$Matches.IdleTime; LogonTime=$Matches.LogonTime.Trim(); Source=$source; LogonType=$logonType } } } }; if ($rows.Count -eq 0) { $rows = @([pscustomobject]@{ User=$env:USERNAME; SessionName='console'; SessionId=$null; State='Active'; IdleTime='-'; LogonTime='-'; Source='Local'; LogonType=2 }) }; $rows | ConvertTo-Json -Compress -Depth 3"`;
 windowsLocalCommands.file_scan = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$winTemp = if ($env:WINDIR) { Join-Path $env:WINDIR 'Temp' } else { 'C:\\Windows\\Temp' }; $tempRoots = @($env:TEMP, $winTemp) | Where-Object { $_ -and (Test-Path $_) }; $publicDownloads = if ($env:PUBLIC) { Join-Path $env:PUBLIC 'Downloads' } else { $null }; $userDownloads = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'Downloads' } else { $null }; $execRoots = @($publicDownloads, $userDownloads, $env:APPDATA, $env:LOCALAPPDATA) | Where-Object { $_ -and (Test-Path $_) }; function Emit($name, $items) { Write-Output ('===' + $name + '==='); @($items) | ConvertTo-Json -Compress -Depth 4 }; $recentTemp = @(); foreach ($root in $tempRoots) { $recentTemp += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-1) }) }; Emit 'RECENT_TEMP' ($recentTemp | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension); $executables = @(); foreach ($root in $execRoots) { $executables += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; Emit 'USER_WRITABLE_EXECUTABLES' ($executables | Sort-Object LastWriteTime -Descending | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension); $webRoots = @('C:\\inetpub\\wwwroot','C:\\phpstudy_pro\\WWW','C:\\xampp\\htdocs','C:\\wamp64\\www','C:\\BtSoft\\WebSites') | Where-Object { Test-Path $_ }; $webFiles = @(); foreach ($root in $webRoots) { $webFiles += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Extension -match '^\\.(php|asp|aspx|jsp|jspx|js|config)$' }) }; Emit 'RECENT_WEBROOT' ($webFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension)"`;
 windowsLocalCommands.suspicious_files = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$winTemp = if ($env:WINDIR) { Join-Path $env:WINDIR 'Temp' } else { 'C:\\Windows\\Temp' }; $tempRoots = @($env:TEMP, $winTemp) | Where-Object { $_ -and (Test-Path $_) }; $userDownloads = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'Downloads' } else { $null }; $roots = @($tempRoots, $userDownloads, $env:APPDATA, $env:LOCALAPPDATA) | Where-Object { $_ -and (Test-Path $_) }; Write-Output '===RECENT_TEMP==='; $recentTemp = @(); foreach ($root in $tempRoots) { $recentTemp += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-1) }) }; $recentTemp | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===TEMP_EXE==='; $tempExe = @(); foreach ($root in $tempRoots) { $tempExe += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $tempExe | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===HIDDEN_EXE==='; $hiddenExe = @(); foreach ($root in $roots) { $hiddenExe += @(Get-ChildItem -LiteralPath $root -File -Force -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Attributes -band [IO.FileAttributes]::Hidden -and $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $hiddenExe | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===RECENT_MODIFIED==='; $recentExec = @(); foreach ($root in $roots) { $recentExec += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $recentExec | Sort-Object LastWriteTime -Descending | Select-Object -First 120 -ExpandProperty FullName"`;
@@ -1518,6 +1610,18 @@ export function getWindowsLocalCommand(moduleKey: string, webroot = ''): string 
         return buildWindowsWebshellScanCommand(webroot);
     }
     return windowsLocalCommands[currentKey];
+}
+
+export function getWindowsFullCollectionCommand(moduleKey: string, startTimeExpression?: string): string | undefined {
+    const currentKey = moduleKey === 'software' ? 'installed_software' : moduleKey;
+    if (currentKey === 'security_events') {
+        return buildWindowsSecurityEventsExportCommand();
+    }
+
+    const logName = windowsEventLogModuleNames[currentKey];
+    if (!logName) return undefined;
+
+    return buildWindowsEventLogExportCommand(logName, startTimeExpression);
 }
 
 function formatUptime(seconds: number): string {
@@ -1625,6 +1729,9 @@ export default function ModuleDetail({
     const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
     const [rawOutput, setRawOutput] = useState<string>(''); // 原始命令输出
     const [collectionDiagnostic, setCollectionDiagnostic] = useState<CollectionDiagnostic | null>(null);
+    const [collectionArtifact, setCollectionArtifact] = useState<WindowsCollectionArtifact | null>(null);
+    const [collectionPreviewLimit, setCollectionPreviewLimit] = useState<number | null>(null);
+    const [fullCollectionLoading, setFullCollectionLoading] = useState(false);
     const [dbSelectedDb, setDbSelectedDb] = useState<string>('');
     const [dbSelectedTable, setDbSelectedTable] = useState<string>('');
     const [dbTablesList, setDbTablesList] = useState<string[]>([]);
@@ -1858,6 +1965,8 @@ export default function ModuleDetail({
         setTableData([]);
         setListData([]);
         setCollectionDiagnostic(null);
+        setCollectionArtifact(null);
+        setCollectionPreviewLimit(null);
 
         try {
             if (mode === 'local' && moduleKey === 'system_info') {
@@ -2098,21 +2207,9 @@ export default function ModuleDetail({
             } else if (keyToCheck === 'web_access_log') {
                 command = `${command} | tail -n 3000`;
             } else if (['win_security_log', 'win_system_log', 'win_app_log', 'win_powershell_log'].includes(keyToCheck)) {
-                const winTimeMap: Record<string, string> = {
-                    '1h': '(Get-Date).AddHours(-1)',
-                    '6h': '(Get-Date).AddHours(-6)',
-                    '24h': '(Get-Date).AddDays(-1)',
-                    '3d': '(Get-Date).AddDays(-3)'
-                };
-                const winSince = winTimeMap[timeRange];
-                const logNameMap: Record<string, string> = {
-                    'win_security_log': 'Security',
-                    'win_system_log': 'System',
-                    'win_app_log': 'Application',
-                    'win_powershell_log': 'Windows PowerShell'
-                };
-                const logName = logNameMap[keyToCheck];
-                command = `try { Get-WinEvent -FilterHashtable @{LogName='${logName}'; StartTime=${winSince}} | Select-Object @{N="time";E={$_.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss")}}, @{N="id";E={$_.Id}}, @{N="message";E={($_.Message -replace "\`n", " " -replace "\`r", " ").Substring(0, [Math]::Min(150, $_.Message.Length))}} | ConvertTo-Json -Compress } catch { Write-Host "[] $_" }`;
+                const winSince = windowsLogTimeRangeStartExpressions[timeRange];
+                const logName = windowsEventLogModuleNames[keyToCheck];
+                command = buildWindowsEventLogCommand(logName, winSince);
             }
         }
 
@@ -5478,7 +5575,11 @@ export default function ModuleDetail({
         case 'security_events': {
                 const jsonData = tryParseJsonArray(output);
                 if (jsonData) {
-                    const errorItem = jsonData.find((item: any) =>
+                    const parsedValue = JSON.parse(output.trim());
+                    const { rows, artifact, previewLimit } = readArtifactPreview(parsedValue);
+                    setCollectionArtifact(artifact);
+                    setCollectionPreviewLimit(previewLimit);
+                    const errorItem = rows.find((item: any) =>
                         item && typeof item === 'object' && (item.error || item.Error || item.EventId === 'error')
                     );
                     if (errorItem) {
@@ -5489,7 +5590,7 @@ export default function ModuleDetail({
                         );
                         break;
                     }
-                    const data = jsonData.map((item: any, i: number) => ({
+                    const data = rows.map((item: any, i: number) => ({
                         key: i,
                         eventId: String(item.EventId ?? item.event_id ?? item.eventId ?? item.Id ?? item.id ?? '-'),
                         timeCreated: String(item.TimeCreated ?? item.time_created ?? item.timeCreated ?? item.time ?? '-'),
@@ -5529,8 +5630,9 @@ export default function ModuleDetail({
                     }
                     // 解析 JSON
                     const parsed = JSON.parse(jsonStr);
-                    // 处理单个对象或数组
-                    const arr = Array.isArray(parsed) ? parsed : [parsed];
+                    const { rows: arr, artifact, previewLimit } = readArtifactPreview(parsed);
+                    setCollectionArtifact(artifact);
+                    setCollectionPreviewLimit(previewLimit);
                     const errorItem = arr.find((item: any) => item && typeof item === 'object' && (item.error || item.Error));
                     if (errorItem) {
                         setCollectionFailureDiagnostic(
@@ -10406,6 +10508,47 @@ export default function ModuleDetail({
     const renderWindowsToolbar = () => {
         if (!showSearch) return null;
 
+        const supportsFullWindowsLogExport = isWindowsLocalMode
+            && (moduleKey === 'security_events' || Boolean(windowsEventLogModuleNames[moduleKey]));
+
+        const openCollectionArtifact = async () => {
+            if (!collectionArtifact?.path) return;
+
+            try {
+                await revealItemInDir(collectionArtifact.path);
+            } catch (error) {
+                message.error(`打开采集文件失败: ${error}`);
+            }
+        };
+
+        const exportFullWindowsCollection = async () => {
+            const startTimeExpression = timeRange && timeRange !== 'all'
+                ? windowsLogTimeRangeStartExpressions[timeRange]
+                : undefined;
+            const command = getWindowsFullCollectionCommand(moduleKey, startTimeExpression);
+            if (!command) return;
+
+            setFullCollectionLoading(true);
+            message.loading({ content: '正在导出全量日志...', key: 'windows-full-log-export', duration: 0 });
+            try {
+                const output = await executeRemoteCommand(command);
+                setRawOutput(output);
+                parseAndSetData(moduleKey, output);
+
+                const parsed = JSON.parse(output);
+                const { artifact } = readArtifactPreview(parsed);
+                if (artifact?.path) {
+                    message.success({ content: `全量日志已导出: ${artifact.path}`, key: 'windows-full-log-export', duration: 4 });
+                } else {
+                    message.warning({ content: '全量日志导出完成，但未返回文件路径', key: 'windows-full-log-export', duration: 4 });
+                }
+            } catch (error) {
+                message.error({ content: `全量日志导出失败: ${error}`, key: 'windows-full-log-export', duration: 4 });
+            } finally {
+                setFullCollectionLoading(false);
+            }
+        };
+
         return (
             <div className="windows-data-toolbar">
                 <div className="windows-data-toolbar-main">
@@ -10431,9 +10574,34 @@ export default function ModuleDetail({
                             ]}
                         />
                     )}
-                    <Text className="windows-result-count" type="secondary">共 {filteredCount} 条结果</Text>
+                    <Text className="windows-result-count" type="secondary">
+                        {collectionArtifact
+                            ? `预览 ${filteredCount} 条 / 全量 ${collectionArtifact.totalCount} 条`
+                            : collectionPreviewLimit
+                                ? `快速预览 ${filteredCount} 条`
+                            : `共 ${filteredCount} 条结果`}
+                    </Text>
                 </div>
                 <div className="windows-data-toolbar-actions">
+                    {supportsFullWindowsLogExport && (
+                        <Button
+                            icon={<DownloadOutlined />}
+                            loading={fullCollectionLoading}
+                            onClick={exportFullWindowsCollection}
+                            title="导出完整日志到临时目录"
+                        >
+                            导出全量日志
+                        </Button>
+                    )}
+                    {collectionArtifact && (
+                        <Button
+                            icon={<FolderOpenOutlined />}
+                            onClick={openCollectionArtifact}
+                            title={collectionArtifact.path}
+                        >
+                            打开全量文件
+                        </Button>
+                    )}
                     {isCompactWindowsWorkspaceModule && (
                         <Button
                             icon={<ReloadOutlined spin={loading} />}
@@ -10780,8 +10948,26 @@ export default function ModuleDetail({
                                     ]}
                                 />
                             )}
-                            <Text type="secondary">共 {filteredCount} 条</Text>
+                            <Text type="secondary">
+                                {collectionArtifact
+                                    ? `预览 ${filteredCount} 条 / 全量 ${collectionArtifact.totalCount} 条`
+                                    : `共 ${filteredCount} 条`}
+                            </Text>
                         </div>
+                        {collectionArtifact && (
+                            <Button
+                                icon={<FolderOpenOutlined />}
+                                onClick={async () => {
+                                    try {
+                                        await revealItemInDir(collectionArtifact.path);
+                                    } catch (error) {
+                                        message.error(`打开采集文件失败: ${error}`);
+                                    }
+                                }}
+                            >
+                                打开全量文件
+                            </Button>
+                        )}
                         <Popover
                             trigger="click"
                             placement="bottomRight"

@@ -129,6 +129,55 @@ describe('ModuleDetail Windows log rendering', () => {
     });
   });
 
+  it('shows full event log artifact metadata while rendering preview rows', async () => {
+    renderLocalWindowsModule(
+      'win_security_log',
+      JSON.stringify({
+        artifactPath: 'C:\\Users\\analyst\\AppData\\Local\\Temp\\Lumina-IR\\Security-20260625.csv',
+        totalCount: 1200,
+        preview: [
+          {
+            time: '2026-06-25 19:30:00',
+            id: 4625,
+            message: 'Failed login from 10.0.0.8',
+          },
+        ],
+        format: 'csv',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed login from 10.0.0.8')).toBeInTheDocument();
+      expect(screen.getByText(/预览 1 条 \/ 全量 1200 条/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /打开全量文件/ })).toBeInTheDocument();
+    });
+  });
+
+  it('renders quick event log previews without pretending they are full artifacts', async () => {
+    renderLocalWindowsModule(
+      'win_security_log',
+      JSON.stringify({
+        previewLimit: 500,
+        isPreview: true,
+        preview: [
+          {
+            time: '2026-06-25 19:30:00',
+            id: 4625,
+            message: 'Failed login from 10.0.0.8',
+          },
+        ],
+        format: 'json',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed login from 10.0.0.8')).toBeInTheDocument();
+      expect(screen.getByText(/\u5feb\u901f\u9884\u89c8 1 \u6761/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /\u5bfc\u51fa\u5168\u91cf\u65e5\u5fd7/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /\u6253\u5f00\u5168\u91cf\u6587\u4ef6/ })).not.toBeInTheDocument();
+    });
+  });
+
   it('shows a diagnostic when Windows event log output is an access error', async () => {
     renderLocalWindowsModule('win_security_log', '[需要管理员权限] 请以管理员身份运行程序来查看安全日志');
 
