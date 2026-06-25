@@ -361,7 +361,7 @@ describe('windows database detail contract', () => {
     );
   });
 
-  it('shows preview row actions without requiring edit mode', async () => {
+  it('uses a themed row context menu without a redundant action column', async () => {
     const onRequest = vi
       .fn()
       .mockResolvedValueOnce({ databases: ['appdb'] })
@@ -391,10 +391,18 @@ describe('windows database detail contract', () => {
     expect(await screen.findByText('old@example.com')).toBeInTheDocument();
 
     expect(screen.queryByRole('switch', { name: /编辑模式/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: '操作' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /新增行/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /复制/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /编辑/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /删除/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /复制/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /编辑/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(screen.getByText('old@example.com'));
+
+    expect(await screen.findByRole('menuitem', { name: /复制/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /新增/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /编辑/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /删除/ })).toBeInTheDocument();
   });
 
   it('submits a controlled row update and refreshes preview', async () => {
@@ -437,7 +445,8 @@ describe('windows database detail contract', () => {
     expect(await screen.findByText('id')).toBeInTheDocument();
     fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
     expect(await screen.findByText('old@example.com')).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: /编辑/ }));
+    fireEvent.contextMenu(screen.getByText('old@example.com'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /编辑/ }));
     fireEvent.change(screen.getByLabelText('email'), { target: { value: 'new@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: /保存/ }));
 
@@ -476,7 +485,9 @@ describe('windows database detail contract', () => {
     fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
     expect(await screen.findByText('hello')).toBeInTheDocument();
 
-    expect(await screen.findByRole('button', { name: /编辑/ })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /删除/ })).toBeDisabled();
+    fireEvent.contextMenu(screen.getByText('hello'));
+
+    expect(await screen.findByRole('menuitem', { name: /编辑/ })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('menuitem', { name: /删除/ })).toHaveAttribute('aria-disabled', 'true');
   });
 });

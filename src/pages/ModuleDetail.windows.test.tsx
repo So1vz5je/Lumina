@@ -567,8 +567,8 @@ describe('Windows local analysis commands', () => {
     expect(await screen.findByText('id')).toBeInTheDocument();
     fireEvent.click(document.querySelector('[id$="-tab-preview"]') as HTMLElement);
     expect(await screen.findByText('old@example.com')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('switch', { name: /编辑模式/ }));
-    fireEvent.click(await screen.findByRole('button', { name: /编辑/ }));
+    fireEvent.contextMenu(screen.getByText('old@example.com'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /编辑/ }));
     fireEvent.change(screen.getByLabelText('email'), { target: { value: 'new@example.com' } });
     fireEvent.click(screen.getByRole('button', { name: /保存/ }));
 

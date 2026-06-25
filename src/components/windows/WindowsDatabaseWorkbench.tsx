@@ -1,6 +1,7 @@
-import { Alert, Button, Empty, Input, InputNumber, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, InputNumber, Modal, Spin, Table, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
+import type { MenuProps } from 'antd';
 import {
   buildChangedWindowsDatabaseValues,
   buildWindowsDatabaseRowIdentity,
@@ -309,7 +310,6 @@ export function WindowsDatabaseWorkbench({
   const [rowEditorOpen, setRowEditorOpen] = useState(false);
   const [rowEditorMode, setRowEditorMode] = useState<'insert' | 'update'>('insert');
   const [editingRow, setEditingRow] = useState<Record<string, unknown> | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; row: Record<string, unknown> } | null>(null);
   const [databaseLoading, setDatabaseLoading] = useState(false);
   const [tableLoading, setTableLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -337,7 +337,6 @@ export function WindowsDatabaseWorkbench({
       setSelectedTable(null);
       setRowEditorOpen(false);
       setEditingRow(null);
-      setContextMenu(null);
       setMutationError(null);
       setMutationSuccess(null);
       setSql(buildSampleSql(instance.engine, null, null, DEFAULT_READONLY_ROW_LIMIT));
@@ -377,21 +376,6 @@ export function WindowsDatabaseWorkbench({
     };
   }, [instance.engine, instance.id, onRequest]);
 
-  useEffect(() => {
-    if (!contextMenu) {
-      return;
-    }
-
-    const closeContextMenu = () => setContextMenu(null);
-    window.addEventListener('click', closeContextMenu);
-    window.addEventListener('keydown', closeContextMenu);
-
-    return () => {
-      window.removeEventListener('click', closeContextMenu);
-      window.removeEventListener('keydown', closeContextMenu);
-    };
-  }, [contextMenu]);
-
   const previewColumns = useMemo(
     () =>
       (previewResult?.columns ?? []).map((column) => ({
@@ -399,8 +383,9 @@ export function WindowsDatabaseWorkbench({
         dataIndex: column,
         key: column,
         ellipsis: true,
+        render: (value: unknown, row: Record<string, unknown>) => renderPreviewCell(value, row),
       })),
-    [previewResult],
+    [previewResult, columns, mutationLoading, onMutation, selectedTable],
   );
 
   const previewRows = useMemo(
@@ -450,7 +435,6 @@ export function WindowsDatabaseWorkbench({
     setEditingRow(null);
     setMutationError(null);
     setMutationSuccess(null);
-    setContextMenu(null);
     setRowEditorOpen(true);
   };
 
@@ -459,7 +443,6 @@ export function WindowsDatabaseWorkbench({
     setEditingRow(row);
     setMutationError(null);
     setMutationSuccess(null);
-    setContextMenu(null);
     setRowEditorOpen(true);
   };
 
@@ -471,7 +454,6 @@ export function WindowsDatabaseWorkbench({
     setPreviewResult(null);
     setRowEditorOpen(false);
     setEditingRow(null);
-    setContextMenu(null);
     setMutationError(null);
     setMutationSuccess(null);
     setTableError(null);
@@ -531,7 +513,6 @@ export function WindowsDatabaseWorkbench({
     setPreviewResult(null);
     setRowEditorOpen(false);
     setEditingRow(null);
-    setContextMenu(null);
     setMutationError(null);
     setMutationSuccess(null);
     setDetailError(null);
@@ -637,8 +618,88 @@ export function WindowsDatabaseWorkbench({
     void navigator.clipboard?.writeText(text);
     setMutationSuccess('已复制当前行');
     setMutationError(null);
-    setContextMenu(null);
   };
+
+  function confirmDeleteRow(row: Record<string, unknown>) {
+    const rowIdentity = buildWindowsDatabaseRowIdentity(columns, row);
+    if (!rowIdentity) {
+      setMutationError(MUTATION_MISSING_IDENTITY_ERROR);
+      return;
+    }
+
+    Modal.confirm({
+      title: '确认删除这一行？',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => deleteRow(row),
+    });
+  }
+
+  function getPreviewContextMenuItems(row: Record<string, unknown>): MenuProps['items'] {
+    const identity = buildWindowsDatabaseRowIdentity(columns, row);
+    const mutationDisabled = !onMutation || mutationLoading;
+
+    return [
+      {
+        key: 'copy',
+        label: '复制',
+      },
+      {
+        key: 'insert',
+        label: '新增',
+        disabled: !selectedTable || mutationDisabled,
+      },
+      {
+        type: 'divider',
+      },
+      {
+        key: 'edit',
+        label: '编辑',
+        disabled: mutationDisabled || !identity,
+      },
+      {
+        key: 'delete',
+        label: '删除',
+        danger: true,
+        disabled: mutationDisabled || !identity,
+      },
+    ];
+  }
+
+  function handlePreviewContextMenuClick(row: Record<string, unknown>): MenuProps['onClick'] {
+    return (event) => {
+      if (event.key === 'copy') {
+        copyRow(row);
+        return;
+      }
+
+      if (event.key === 'insert') {
+        openInsertEditor();
+        return;
+      }
+
+      if (event.key === 'edit') {
+        openUpdateEditor(row);
+        return;
+      }
+
+      if (event.key === 'delete') {
+        confirmDeleteRow(row);
+      }
+    };
+  }
+
+  function renderPreviewCell(value: unknown, row: Record<string, unknown>) {
+    return (
+      <Dropdown
+        menu={{ items: getPreviewContextMenuItems(row), onClick: handlePreviewContextMenuClick(row) }}
+        trigger={['contextMenu']}
+      >
+        <span style={styles.previewCell}>{value == null ? '' : String(value)}</span>
+      </Dropdown>
+    );
+  }
 
   const handleRunQuery = async () => {
     const trimmedSql = sql.trim();
@@ -676,44 +737,6 @@ export function WindowsDatabaseWorkbench({
       setQueryLoading(false);
     }
   };
-
-  const previewActionColumns = [
-    {
-      title: '操作',
-      key: '__actions',
-      fixed: 'right' as const,
-      width: 210,
-      render: (_: unknown, row: Record<string, unknown>) => {
-        const identity = buildWindowsDatabaseRowIdentity(columns, row);
-
-        return (
-          <Space size={6}>
-            <Button size="small" aria-label="复制" onClick={() => copyRow(row)}>
-              复制
-            </Button>
-            <Button
-              size="small"
-              aria-label="编辑"
-              disabled={!onMutation || !identity || mutationLoading}
-              onClick={() => openUpdateEditor(row)}
-            >
-              编辑
-            </Button>
-            <Popconfirm
-              title="确认删除这一行？"
-              disabled={!onMutation || !identity || mutationLoading}
-              onConfirm={() => void deleteRow(row)}
-            >
-              <Button size="small" danger aria-label="删除" disabled={!onMutation || !identity || mutationLoading}>
-                删除
-              </Button>
-            </Popconfirm>
-          </Space>
-        );
-      },
-    },
-  ];
-  const previewTableColumns = [...previewColumns, ...previewActionColumns];
 
   return (
     <div className="windows-database-workbench" data-testid="windows-database-workbench" style={styles.root}>
@@ -918,13 +941,7 @@ export function WindowsDatabaseWorkbench({
                             rowKey="__workbenchRowKey"
                             scroll={{ y: TABLE_SCROLL_HEIGHT, x: 'max-content' }}
                             dataSource={previewRows}
-                            columns={previewTableColumns}
-                            onRow={(row) => ({
-                              onContextMenu: (event) => {
-                                event.preventDefault();
-                                setContextMenu({ x: event.clientX, y: event.clientY, row });
-                              },
-                            })}
+                            columns={previewColumns}
                           />
                         )}
                       </Spin>
@@ -1011,49 +1028,6 @@ export function WindowsDatabaseWorkbench({
         onCancel={() => setRowEditorOpen(false)}
         onSubmit={(values) => void submitRowMutation(values)}
       />
-      {contextMenu ? (
-        <div style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}>
-          <Button type="text" size="small" block onClick={() => copyRow(contextMenu.row)}>
-            复制
-          </Button>
-          <Button
-            type="text"
-            size="small"
-            block
-            disabled={!selectedTable || !onMutation || mutationLoading}
-            onClick={openInsertEditor}
-          >
-            新增
-          </Button>
-          <Button
-            type="text"
-            size="small"
-            block
-            disabled={!onMutation || !buildWindowsDatabaseRowIdentity(columns, contextMenu.row) || mutationLoading}
-            onClick={() => {
-              openUpdateEditor(contextMenu.row);
-              setContextMenu(null);
-            }}
-          >
-            编辑
-          </Button>
-          <Popconfirm
-            title="确认删除这一行？"
-            disabled={!onMutation || !buildWindowsDatabaseRowIdentity(columns, contextMenu.row) || mutationLoading}
-            onConfirm={() => void deleteRow(contextMenu.row)}
-          >
-            <Button
-              type="text"
-              size="small"
-              danger
-              block
-              disabled={!onMutation || !buildWindowsDatabaseRowIdentity(columns, contextMenu.row) || mutationLoading}
-            >
-              删除
-            </Button>
-          </Popconfirm>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1233,15 +1207,13 @@ const styles: Record<string, CSSProperties> = {
     whiteSpace: 'nowrap',
     border: 0,
   },
-  contextMenu: {
-    position: 'fixed',
-    zIndex: 1100,
-    minWidth: 120,
-    padding: 6,
-    background: '#fff',
-    border: '1px solid #d9d9d9',
-    borderRadius: 6,
-    boxShadow: '0 8px 24px rgba(15, 23, 42, 0.18)',
+  previewCell: {
+    display: 'block',
+    width: '100%',
+    minHeight: 22,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
 };
 
