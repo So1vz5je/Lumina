@@ -151,16 +151,22 @@ const readArtifactPreview = (value: unknown): {
             };
         }
 
+        const resolvedTotalCount = Number.isFinite(totalCount) ? totalCount : rows.length;
+
         return {
             rows,
             artifact: {
                 path: String(artifactPath),
-                totalCount: Number.isFinite(totalCount) ? totalCount : rows.length,
+                totalCount: resolvedTotalCount,
                 previewCount: rows.length,
                 format: String(value.format ?? value.Format ?? 'csv'),
             },
             previewLimit: Number.isFinite(previewLimit) ? previewLimit : null,
-            pageInfo,
+            pageInfo: pageInfo ?? {
+                page: 1,
+                pageSize: WINDOWS_EVENT_LOG_DEFAULT_PAGE_SIZE,
+                totalCount: resolvedTotalCount,
+            },
         };
     }
 
@@ -170,16 +176,21 @@ const readArtifactPreview = (value: unknown): {
 
     const preview = Array.isArray(value.preview) ? value.preview : [];
     const totalCount = Number(value.totalCount ?? preview.length);
+    const resolvedTotalCount = Number.isFinite(totalCount) ? totalCount : preview.length;
     return {
         rows: preview,
         artifact: {
             path: String(value.artifactPath),
-            totalCount: Number.isFinite(totalCount) ? totalCount : preview.length,
+            totalCount: resolvedTotalCount,
             previewCount: preview.length,
             format: String(value.format ?? 'csv'),
         },
         previewLimit: null,
-        pageInfo: null,
+        pageInfo: {
+            page: 1,
+            pageSize: WINDOWS_EVENT_LOG_DEFAULT_PAGE_SIZE,
+            totalCount: resolvedTotalCount,
+        },
     };
 };
 
@@ -1638,6 +1649,21 @@ function buildWindowsSecurityEventsExportCommand(): string {
     return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ids = @(4624,4625,4648,4672,4720,4722,4724,4725,4726,4728,4732,4738,4740,4776); $dir=Join-Path ([IO.Path]::GetTempPath()) 'Lumina-IR'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'; $path=Join-Path $dir ('security_events-' + $stamp + '.csv'); $count=0; $preview=New-Object System.Collections.Generic.List[object]; try { Get-WinEvent -FilterHashtable @{LogName='Security'; ID=$ids} -ErrorAction Stop | ForEach-Object { $msg = ($_.Message -replace '[\\r\\n]+', ' '); $eventType = switch ($_.Id) { 4624 { 'Logon success' } 4625 { 'Failed logon' } 4648 { 'Explicit credentials logon' } 4672 { 'Special privileges assigned' } 4720 { 'User created' } 4722 { 'User enabled' } 4724 { 'Password reset' } 4725 { 'User disabled' } 4726 { 'User deleted' } 4728 { 'Added to security group' } 4732 { 'Added to local group' } 4738 { 'User account changed' } 4740 { 'Account locked' } 4776 { 'Credential validation' } default { 'Security event' } }; $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] }; $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] }; $logonType = ''; if ($msg -match 'Logon Type:\\s+(\\d+)') { $logonType = $Matches[1] }; $status = ''; if ($msg -match 'Status:\\s+([^\\s]+)') { $status = $Matches[1] }; $row=[pscustomobject]@{ EventId=$_.Id; TimeCreated=$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'); EventType=$eventType; Description=$msg; Username=$user; SourceIp=$ip; LogonType=$logonType; Status=$status; Suspicious=($_.Id -in @(4625,4672,4720,4726,4740)) }; if ($count -lt ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}) { [void]$preview.Add($row) }; $count++; $row } | Export-Csv -LiteralPath $path -NoTypeInformation -Encoding UTF8; [pscustomobject]@{ artifactPath=$path; totalCount=$count; preview=@($preview | Select-Object -First ${WINDOWS_EVENT_LOG_PREVIEW_LIMIT}); format='csv' } | ConvertTo-Json -Compress -Depth 5 } catch { if ($_.Exception.Message -match 'No events were found') { '' | Set-Content -LiteralPath $path -Encoding UTF8; [pscustomobject]@{ artifactPath=$path; totalCount=0; preview=@(); format='csv' } | ConvertTo-Json -Compress -Depth 5 } else { [pscustomobject]@{ EventId='error'; TimeCreated=''; EventType='Error'; Description=$_.Exception.Message; Username=''; SourceIp=''; LogonType=''; Status=''; Suspicious=$true } | ConvertTo-Json -Compress -Depth 4 } }"`;
 }
 
+export function getWindowsArtifactPageCommand(
+    artifactPath: string,
+    page = 1,
+    pageSize = WINDOWS_EVENT_LOG_DEFAULT_PAGE_SIZE,
+    totalCount = 0,
+): string {
+    const currentPage = Math.max(1, Math.floor(page));
+    const take = Math.min(500, Math.max(1, Math.floor(pageSize)));
+    const skip = (currentPage - 1) * take;
+    const safePath = artifactPath.replace(/'/g, "''");
+    const safeTotalCount = Math.max(0, Math.floor(totalCount));
+
+    return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $path='${safePath}'; $skip=${skip}; $take=${take}; try { if (-not (Test-Path -LiteralPath $path)) { throw ('Artifact not found: ' + $path) }; $rows=@(Import-Csv -LiteralPath $path | Select-Object -Skip $skip -First $take); [pscustomobject]@{ artifactPath=$path; totalCount=${safeTotalCount}; page=${currentPage}; pageSize=${take}; isPaged=$true; preview=@($rows); format='csv' } | ConvertTo-Json -Compress -Depth 5 } catch { $err=[pscustomobject]@{ error=$_.Exception.Message }; [pscustomobject]@{ artifactPath=$path; totalCount=${safeTotalCount}; page=${currentPage}; pageSize=${take}; isPaged=$true; preview=@($err); format='csv' } | ConvertTo-Json -Compress -Depth 5 }"`;
+}
+
 windowsLocalCommands.win_security_log = buildWindowsEventLogCommand('Security');
 windowsLocalCommands.win_system_log = buildWindowsEventLogCommand('System');
 windowsLocalCommands.win_app_log = buildWindowsEventLogCommand('Application');
@@ -1785,6 +1811,8 @@ export default function ModuleDetail({
     const [collectionPreviewLimit, setCollectionPreviewLimit] = useState<number | null>(null);
     const [windowsLogPageInfo, setWindowsLogPageInfo] = useState<WindowsLogPageInfo | null>(null);
     const [fullCollectionLoading, setFullCollectionLoading] = useState(false);
+    const [fullCollectionProgress, setFullCollectionProgress] = useState(0);
+    const [fullCollectionStage, setFullCollectionStage] = useState('');
     const [dbSelectedDb, setDbSelectedDb] = useState<string>('');
     const [dbSelectedTable, setDbSelectedTable] = useState<string>('');
     const [dbTablesList, setDbTablesList] = useState<string[]>([]);
@@ -7383,6 +7411,29 @@ export default function ModuleDetail({
         );
     };
 
+    const loadWindowsArtifactPage = async (page: number, pageSize: number) => {
+        if (!collectionArtifact?.path) {
+            await loadData({ windowsLogPage: page, windowsLogPageSize: pageSize });
+            return;
+        }
+
+        setLoading(true);
+        setCollectionDiagnostic(null);
+        try {
+            const command = getWindowsArtifactPageCommand(
+                collectionArtifact.path,
+                page,
+                pageSize,
+                collectionArtifact.totalCount,
+            );
+            const output = await executeRemoteCommand(command);
+            setRawOutput(output);
+            parseAndSetData(moduleKey, output);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const renderTable = () => {
         if (tableData.length === 0) return null;
         const columnConfigs: Record<string, any[]> = {
@@ -8155,7 +8206,7 @@ export default function ModuleDetail({
         // 根据搜索关键字过滤数据
         const filteredData = getFilteredTableData(tableData);
         const isWindowsPagedLogTable = isWindowsLocalMode
-            && Boolean(windowsEventLogModuleNames[tableColumnKey])
+            && (Boolean(windowsEventLogModuleNames[tableColumnKey]) || tableColumnKey === 'security_events')
             && Boolean(windowsLogPageInfo);
         const tablePagination = isWindowsPagedLogTable
             ? {
@@ -8168,7 +8219,11 @@ export default function ModuleDetail({
                 showQuickJumper: true,
                 size: isModuleWorkbenchMode ? 'small' as const : 'default' as const,
                 onChange: (page: number, pageSize: number) => {
-                    void loadData({ windowsLogPage: page, windowsLogPageSize: pageSize });
+                    if (collectionArtifact?.path) {
+                        void loadWindowsArtifactPage(page, pageSize);
+                    } else {
+                        void loadData({ windowsLogPage: page, windowsLogPageSize: pageSize });
+                    }
                 },
             }
             : {
@@ -10631,23 +10686,40 @@ export default function ModuleDetail({
             if (!command) return;
 
             setFullCollectionLoading(true);
-            message.loading({ content: '正在导出全量日志...', key: 'windows-full-log-export', duration: 0 });
+            setFullCollectionProgress(6);
+            setFullCollectionStage('准备加载全部日志...');
+            message.loading({ content: '正在加载全部日志到本地缓存...', key: 'windows-full-log-export', duration: 0 });
+            const progressTimer = window.setInterval(() => {
+                setFullCollectionProgress((previous) => {
+                    if (previous >= 95) return previous;
+                    return Math.min(95, previous + Math.max(1, Math.round((96 - previous) * 0.08)));
+                });
+            }, 500);
             try {
+                setFullCollectionStage('正在读取事件日志并写入临时缓存...');
                 const output = await executeRemoteCommand(command);
                 setRawOutput(output);
                 parseAndSetData(moduleKey, output);
 
                 const parsed = JSON.parse(output);
                 const { artifact } = readArtifactPreview(parsed);
+                setFullCollectionProgress(100);
+                setFullCollectionStage('加载完成，分页将从本地缓存读取');
                 if (artifact?.path) {
-                    message.success({ content: `全量日志已导出: ${artifact.path}`, key: 'windows-full-log-export', duration: 4 });
+                    message.success({ content: `全部日志已加载: ${artifact.path}`, key: 'windows-full-log-export', duration: 4 });
                 } else {
-                    message.warning({ content: '全量日志导出完成，但未返回文件路径', key: 'windows-full-log-export', duration: 4 });
+                    message.warning({ content: '全部日志加载完成，但未返回缓存文件路径', key: 'windows-full-log-export', duration: 4 });
                 }
             } catch (error) {
-                message.error({ content: `全量日志导出失败: ${error}`, key: 'windows-full-log-export', duration: 4 });
+                setFullCollectionStage('加载全部日志失败');
+                message.error({ content: `全部日志加载失败: ${error}`, key: 'windows-full-log-export', duration: 4 });
             } finally {
+                window.clearInterval(progressTimer);
                 setFullCollectionLoading(false);
+                window.setTimeout(() => {
+                    setFullCollectionProgress(0);
+                    setFullCollectionStage('');
+                }, 1400);
             }
         };
 
@@ -10689,12 +10761,12 @@ export default function ModuleDetail({
                 <div className="windows-data-toolbar-actions">
                     {supportsFullWindowsLogExport && (
                         <Button
-                            icon={<DownloadOutlined />}
+                            icon={<FileSearchOutlined />}
                             loading={fullCollectionLoading}
                             onClick={exportFullWindowsCollection}
-                            title="导出完整日志到临时目录"
+                            title="加载完整日志到临时缓存，之后分页从缓存读取"
                         >
-                            导出全量日志
+                            {collectionArtifact ? '重新加载全部日志' : '加载全部日志'}
                         </Button>
                     )}
                     {collectionArtifact && (
@@ -10756,6 +10828,39 @@ export default function ModuleDetail({
         );
     };
 
+    const renderFullCollectionProgress = () => {
+        if (!fullCollectionLoading && fullCollectionProgress <= 0) return null;
+
+        return (
+            <div
+                className="windows-full-log-progress"
+                style={{
+                    padding: '10px 14px',
+                    borderTop: `1px solid ${isDarkMode ? '#30363d' : '#edf2f7'}`,
+                    background: isDarkMode ? '#111827' : '#f8fafc',
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                    <Text style={{ fontSize: 12, color: isDarkMode ? '#d1d5db' : '#334155' }}>
+                        {fullCollectionStage || '正在加载全部日志...'}
+                    </Text>
+                    <Text strong style={{ fontSize: 12, color: isDarkMode ? '#93c5fd' : '#2563eb' }}>
+                        {fullCollectionProgress}%
+                    </Text>
+                </div>
+                <Progress
+                    percent={fullCollectionProgress}
+                    status={fullCollectionProgress >= 100 ? 'success' : 'active'}
+                    size="small"
+                    showInfo={false}
+                />
+                <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
+                    加载完成后，表格分页会从临时缓存读取，不再重复扫描 Windows 事件日志。
+                </Text>
+            </div>
+        );
+    };
+
     const renderWindowsDataSurface = () => (
         <div className="windows-data-workbench" style={{
             border: `1px solid ${isDarkMode ? '#30363d' : '#d9e2ec'}`,
@@ -10764,6 +10869,7 @@ export default function ModuleDetail({
             overflow: 'hidden',
         }}>
             {renderWindowsToolbar()}
+            {renderFullCollectionProgress()}
             {filteredCount > 0 ? (
                 <div className="windows-data-table-frame">
                     {renderTable()}

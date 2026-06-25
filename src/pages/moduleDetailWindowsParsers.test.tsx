@@ -173,7 +173,7 @@ describe('ModuleDetail Windows log rendering', () => {
     await waitFor(() => {
       expect(screen.getByText('Failed login from 10.0.0.8')).toBeInTheDocument();
       expect(screen.getByText(/\u5feb\u901f\u9884\u89c8 1 \u6761/)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /\u5bfc\u51fa\u5168\u91cf\u65e5\u5fd7/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /\u52a0\u8f7d\u5168\u90e8\u65e5\u5fd7/ })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /\u6253\u5f00\u5168\u91cf\u6587\u4ef6/ })).not.toBeInTheDocument();
     });
   });

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import ModuleDetail, { getWindowsFullCollectionCommand, getWindowsLocalCommand, windowsLocalColumnTitles } from './ModuleDetail';
+import ModuleDetail, { getWindowsArtifactPageCommand, getWindowsFullCollectionCommand, getWindowsLocalCommand, windowsLocalColumnTitles } from './ModuleDetail';
 
 const { invokeMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -210,6 +210,20 @@ describe('Windows local analysis commands', () => {
       expect(command, key).toContain('Select-Object -First 500');
       expect(command, key).not.toContain('MaxEvents');
     }
+  });
+
+  it('reads loaded Windows event log pages from the temp artifact instead of querying Event Log again', () => {
+    const command = getWindowsArtifactPageCommand('C:\\Temp\\Lumina-IR\\Security-20260625.csv', 4, 25, 1200);
+
+    expect(command).toContain('Import-Csv');
+    expect(command).toContain('Select-Object -Skip $skip -First $take');
+    expect(command).toContain('$skip=75');
+    expect(command).toContain('$take=25');
+    expect(command).toContain('page=4');
+    expect(command).toContain('pageSize=25');
+    expect(command).toContain('totalCount=1200');
+    expect(command).toContain('artifactPath=$path');
+    expect(command).not.toContain('Get-WinEvent');
   });
 
   it('has concrete high-value Windows DFIR collectors', () => {
