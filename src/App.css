@@ -2555,6 +2555,7 @@ body {
 .analysis-workbench .windows-module-workspace-tabs .ant-tabs-content-holder {
   min-height: 0;
   flex: 1 1 auto;
+  padding-top: 12px;
 }
 
 .analysis-workbench .windows-module-workspace-tabs .ant-tabs-content,
@@ -3153,12 +3154,6 @@ body {
   border-radius: 6px !important;
   background: #ffffff !important;
   box-shadow: none !important;
-}
-
-.analysis-workbench .windows-module-workspace-page .windows-data-workbench {
-  border-top: 0 !important;
-  border-top-left-radius: 0 !important;
-  border-top-right-radius: 0 !important;
 }
 
 .analysis-workbench.dark .windows-data-workbench {
