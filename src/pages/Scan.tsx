@@ -31,6 +31,7 @@ export default function Scan({ onComplete }: ScanProps) {
     [modules],
   );
   const selectedCount = selectedModuleIds.length;
+  const scanScopeText = '系统信息、用户痕迹、网络、进程、文件、持久化、应用、日志和容器';
   const groupedModules = useMemo(() => {
     const groups = new Map<string, ScanModuleOption[]>();
 
@@ -83,7 +84,9 @@ export default function Scan({ onComplete }: ScanProps) {
 
     try {
       setProgress(35);
-      const results = await invoke<AnalysisResult[]>('run_scan');
+      const results = await invoke<AnalysisResult[]>('run_scan', {
+        selectedModules: selectedModuleIds,
+      });
       const filteredResults = results.filter((result) =>
         selectedModuleIds.includes(result.module_name),
       );
@@ -140,6 +143,16 @@ export default function Scan({ onComplete }: ScanProps) {
           <strong>{scanStateLabel}</strong>
         </div>
       </div>
+
+      <section className="scan-scope-note" aria-label="扫描范围">
+        <div>
+          <Text className="scan-panel-kicker">扫描范围</Text>
+          <strong>{scanScopeText}</strong>
+        </div>
+        <Text type="secondary">
+          快速扫描会调用本机 Tauri 分析器采集所选模块证据；取消勾选的模块不会进入本次后端扫描。
+        </Text>
+      </section>
 
       <div className="scan-layout">
         <section className="scan-module-panel">

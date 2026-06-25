@@ -44,13 +44,22 @@ fn windows_analyzer_runners() -> Vec<(&'static str, AnalyzerRunner)> {
     ]
 }
 
+fn should_run_analyzer(name: &str, selected_modules: Option<&[String]>) -> bool {
+    selected_modules
+        .map(|modules| modules.iter().any(|module| module == name))
+        .unwrap_or(true)
+}
+
 /// 同步版本的扫描
-pub fn run_scan_sync() -> Vec<AnalysisResult> {
+pub fn run_scan_sync(selected_modules: Option<&[String]>) -> Vec<AnalysisResult> {
     let mut results = Vec::new();
 
     #[cfg(target_os = "windows")]
     {
-        for (_, runner) in windows_analyzer_runners() {
+        for (name, runner) in windows_analyzer_runners() {
+            if !should_run_analyzer(name, selected_modules) {
+                continue;
+            }
             results.push(runner());
         }
     }
@@ -60,6 +69,8 @@ pub fn run_scan_sync() -> Vec<AnalysisResult> {
 
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
+    use super::should_run_analyzer;
+
     #[test]
     fn windows_scan_includes_selected_optional_modules() {
         let module_names: Vec<String> = super::windows_analyzer_runners()
@@ -71,5 +82,15 @@ mod tests {
         assert!(module_names.contains(&"persistence".to_string()));
         assert!(module_names.contains(&"docker".to_string()));
         assert!(module_names.contains(&"panel".to_string()));
+    }
+
+    #[test]
+    fn selected_scan_modules_filter_registered_analyzers() {
+        let selected = vec!["system_info".to_string(), "network".to_string()];
+
+        assert!(should_run_analyzer("system_info", Some(&selected)));
+        assert!(should_run_analyzer("network", Some(&selected)));
+        assert!(!should_run_analyzer("file_scan", Some(&selected)));
+        assert!(should_run_analyzer("file_scan", None));
     }
 }

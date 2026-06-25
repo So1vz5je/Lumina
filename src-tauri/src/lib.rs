@@ -235,12 +235,17 @@ fn get_system_info() -> SystemInfo {
 }
 
 #[tauri::command]
-async fn run_scan() -> Vec<AnalysisResult> {
-    info!("Starting full scan");
-    let results = tokio::task::spawn_blocking(|| analyzer::run_scan_sync())
-        .await
-        .unwrap_or_default();
-    info!("Full scan completed with {} results", results.len());
+async fn run_scan(selected_modules: Option<Vec<String>>) -> Vec<AnalysisResult> {
+    let selected_count = selected_modules.as_ref().map(|modules| modules.len());
+    info!(
+        "Starting scan with selected module count: {:?}",
+        selected_count
+    );
+    let results =
+        tokio::task::spawn_blocking(move || analyzer::run_scan_sync(selected_modules.as_deref()))
+            .await
+            .unwrap_or_default();
+    info!("Scan completed with {} results", results.len());
     results
 }
 

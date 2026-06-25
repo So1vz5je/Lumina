@@ -9,7 +9,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import type { AnalysisResult } from '../types/analysis';
-import { getScanModuleLabel, getScanStatusMeta } from '../modules/scan/catalog';
+import { getScanModuleLabel, getScanStatusMeta, scanModuleCatalog } from '../modules/scan/catalog';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -633,6 +633,9 @@ export default function Results({ results = [] }: ResultsProps) {
   const selectedModulePosition = selectedResult
     ? results.findIndex((result) => result.module_name === selectedResult.module_name) + 1
     : 0;
+  const scopeGroups = Array.from(new Set(scanModuleCatalog.map((module) => module.group)));
+  const scopeText = scopeGroups.join(' / ');
+  const priorityLabel = priorityCount > 0 ? '需优先复核' : '暂无高优先级';
 
   return (
     <div className="scan-results-workspace">
@@ -640,14 +643,14 @@ export default function Results({ results = [] }: ResultsProps) {
         <div>
           <Text className="scan-eyebrow">扫描结果</Text>
           <Title level={3} className="scan-title">
-            结果工作台
+            应急扫描结果
           </Title>
           <Text className="scan-subtitle">
-            汇总快速扫描输出，按模块查看风险、关键明细和原始结构化数据。
+            汇总本机快速扫描输出，先看处置优先级，再按模块核对关键明细和原始结构化数据。
           </Text>
         </div>
         <div className={`scan-results-posture ${priorityCount > 0 ? 'attention' : 'steady'}`}>
-          <Text>{priorityCount > 0 ? '需关注' : '平稳'}</Text>
+          <Text>{priorityLabel}</Text>
           <strong>{priorityCount}</strong>
           <span>高优先级</span>
         </div>
@@ -655,8 +658,8 @@ export default function Results({ results = [] }: ResultsProps) {
 
       <div className="scan-results-commandbar" aria-label="结果统计">
         <div className="scan-results-commandbar-title">
-          <Text className="scan-panel-kicker">结果统计</Text>
-          <strong>风险总览</strong>
+          <Text className="scan-panel-kicker">处置优先级</Text>
+          <strong>{priorityLabel}</strong>
         </div>
         <div className="scan-stat-grid">
           {statItems.map((item) => (
@@ -674,9 +677,19 @@ export default function Results({ results = [] }: ResultsProps) {
         </Button>
       </div>
 
-      <section className="scan-results-summary-band" aria-label="证据总览">
+      <section className="scan-results-scope-strip" aria-label="快速扫描覆盖范围">
+        <div>
+          <Text className="scan-panel-kicker">快速扫描覆盖范围</Text>
+          <strong>{scanModuleCatalog.length} 个本机分析模块</strong>
+        </div>
+        <Text type="secondary">
+          {scopeText}。本页仅展示本次勾选并完成采集的模块结果。
+        </Text>
+      </section>
+
+      <section className="scan-results-priority-panel" aria-label="处置优先级">
         <div className="scan-results-summary-copy">
-          <Text className="scan-panel-kicker">证据总览</Text>
+          <Text className="scan-panel-kicker">处置优先级</Text>
           <strong>{priorityCount > 0 ? '存在需要优先处置的发现' : '未发现高优先级风险'}</strong>
           <Text type="secondary">
             {priorityCount > 0

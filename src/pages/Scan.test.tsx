@@ -62,7 +62,14 @@ describe('Scan', () => {
     const buttons = screen.getAllByRole('button');
     fireEvent.click(buttons[buttons.length - 1]);
 
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('run_scan'));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        'run_scan',
+        expect.objectContaining({
+          selectedModules: expect.arrayContaining(['system_info']),
+        }),
+      ),
+    );
     await waitFor(() => expect(onComplete).toHaveBeenCalledWith(results));
   });
 
@@ -72,11 +79,14 @@ describe('Scan', () => {
 
     expect(container.querySelector('.scan-workspace')).toBeInTheDocument();
     expect(container.querySelector('.scan-status-strip')).toBeInTheDocument();
+    expect(container.querySelector('.scan-scope-note')).toBeInTheDocument();
     expect(container.querySelector('.scan-group-filter-bar')).toBeInTheDocument();
     expect(container.querySelector('.scan-module-grid')).toBeInTheDocument();
     expect(container.querySelector('.scan-module-group-section')).not.toBeInTheDocument();
     expect(container.querySelectorAll('.scan-module-card').length).toBe(12);
     expect(screen.getByText('快速扫描')).toBeInTheDocument();
+    expect(screen.getByText('扫描范围')).toBeInTheDocument();
+    expect(screen.getByText(/系统信息、用户痕迹、网络、进程、文件、持久化、应用、日志和容器/)).toBeInTheDocument();
     expect(screen.getByText('扫描状态')).toBeInTheDocument();
     expect(screen.getByText('系统信息')).toBeInTheDocument();
     expect(screen.getByText('持久化检测')).toBeInTheDocument();

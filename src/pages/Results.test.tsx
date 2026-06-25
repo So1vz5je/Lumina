@@ -71,12 +71,13 @@ describe('Results', () => {
 
     expect(container.querySelector('.scan-results-workspace')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-commandbar')).toBeInTheDocument();
+    expect(container.querySelector('.scan-results-scope-strip')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-sidebar')).toBeInTheDocument();
     expect(container.querySelector('.scan-result-detail')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-overview')).not.toBeInTheDocument();
-    expect(screen.getByText('扫描结果')).toBeInTheDocument();
-    expect(screen.getByText('结果统计')).toBeInTheDocument();
-    expect(screen.getByText('风险总览')).toBeInTheDocument();
+    expect(screen.getByText('应急扫描结果')).toBeInTheDocument();
+    expect(screen.getByText('快速扫描覆盖范围')).toBeInTheDocument();
+    expect(screen.getAllByText('处置优先级').length).toBeGreaterThan(0);
     expect(screen.getAllByText('系统信息').length).toBeGreaterThan(0);
     expect(screen.getAllByText('安全事件').length).toBeGreaterThan(0);
   });
@@ -116,11 +117,11 @@ describe('Results', () => {
 
     const { container } = render(<Results results={results} />);
 
-    expect(container.querySelector('.scan-results-summary-band')).toBeInTheDocument();
+    expect(container.querySelector('.scan-results-priority-panel')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-detail-grid')).toBeInTheDocument();
     expect(container.querySelector('.scan-selected-module-card')).toBeInTheDocument();
-    expect(screen.getByText('证据总览')).toBeInTheDocument();
-    expect(screen.getAllByText('高优先级').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('处置优先级').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('需优先复核').length).toBeGreaterThan(0);
     expect(screen.getByText('已选模块')).toBeInTheDocument();
     expect(screen.getByText('1 个关键条目')).toBeInTheDocument();
   });
