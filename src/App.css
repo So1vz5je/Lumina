@@ -3555,6 +3555,14 @@ body {
   background: #172231 !important;
 }
 
+.analysis-workbench.dark .windows-module-table .ant-typography code,
+.analysis-workbench.dark .windows-module-table .windows-table-code code {
+  border-color: #334155 !important;
+  background: #0f1722 !important;
+  color: #d7dee8 !important;
+  box-shadow: none !important;
+}
+
 .analysis-workbench .windows-module-header .ant-tag,
 .analysis-workbench .windows-module-table .ant-tag,
 .analysis-workbench .windows-module-table .ant-tag-has-color {

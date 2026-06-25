@@ -64,7 +64,7 @@ afterEach(() => {
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
-function renderLocalWindowsModule(moduleKey: string, stdout: string) {
+function renderLocalWindowsModule(moduleKey: string, stdout: string, options: { isDarkMode?: boolean } = {}) {
   invokeMock.mockImplementation(async (command: string) => {
     if (command === 'execute_local_command') {
       return {
@@ -77,14 +77,14 @@ function renderLocalWindowsModule(moduleKey: string, stdout: string) {
     throw new Error(`Unexpected command: ${command}`);
   });
 
-  render(
+  return render(
     <ModuleDetail
       moduleKey={moduleKey}
       mode="local"
       osType="Windows"
       privilegeMode="none"
       sudoPassword=""
-      isDarkMode={false}
+      isDarkMode={options.isDarkMode ?? false}
       glassEnabled={false}
       wallpaper=""
     />,
@@ -802,6 +802,26 @@ describe('ModuleDetail Windows security module rendering', () => {
       expect(screen.getAllByText('State').length).toBeGreaterThan(0);
       expect(screen.getByText('BlockInbound,AllowOutbound')).toBeInTheDocument();
     });
+  });
+
+  it('uses dark-safe code styling for Windows firewall raw values', async () => {
+    const { container } = renderLocalWindowsModule(
+      'win_firewall',
+      [
+        'Domain Profile Settings:',
+        '----------------------------------------------------------------------',
+        'State                                 OFF',
+        'Firewall Policy                       BlockInbound,AllowOutbound',
+      ].join('\n'),
+      { isDarkMode: true },
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('BlockInbound,AllowOutbound')).toBeInTheDocument();
+    });
+
+    expect(container.querySelector('.windows-module-table')).toBeInTheDocument();
+    expect(container.querySelector('.windows-table-code')).toBeInTheDocument();
   });
 
   it('shows persistence task paths, triggers, and service commands', async () => {

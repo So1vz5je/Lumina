@@ -7821,7 +7821,16 @@ export default function ModuleDetail({
             { title: 'Profile', dataIndex: 'profile', width: 140 },
             { title: 'Setting', dataIndex: 'setting', width: 220, ellipsis: true },
             { title: 'Value', dataIndex: 'value', ellipsis: true },
-            { title: 'Raw', dataIndex: 'raw', ellipsis: true, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v}</Text> },
+            {
+                title: 'Raw',
+                dataIndex: 'raw',
+                ellipsis: true,
+                render: (v: string) => (
+                    <Text code className="windows-table-code" style={{ fontSize: 11 }}>
+                        {v}
+                    </Text>
+                ),
+            },
         ];
 
         columnConfigs.recent_files = osType === 'Windows' ? [
