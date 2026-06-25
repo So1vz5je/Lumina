@@ -145,17 +145,14 @@ describe('ModuleDetail Linux remote module rendering', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('prod-web-01').length).toBeGreaterThan(0);
-      expect(screen.getByText('远程健康摘要')).toBeInTheDocument();
-      expect(screen.getByText('负载压力')).toBeInTheDocument();
-      expect(screen.getByText('190%')).toBeInTheDocument();
-      expect(screen.getByText('内存压力')).toBeInTheDocument();
-      expect(screen.getAllByText('90%').length).toBeGreaterThan(0);
-      expect(screen.getByText('磁盘最高使用率')).toBeInTheDocument();
-      expect(screen.getByText('93%')).toBeInTheDocument();
-      expect(screen.getByText('建议优先检查')).toBeInTheDocument();
-      expect(screen.getByText(/进程异常检测/)).toBeInTheDocument();
-      expect(screen.getByText(/计划任务\(Cron\)/)).toBeInTheDocument();
-      expect(screen.getByText('/')).toBeInTheDocument();
+      // 新版 UI 重构为扁平化布局，显示关键指标
+      expect(screen.getByText('运行时间')).toBeInTheDocument();
+      expect(screen.getByText('负载')).toBeInTheDocument();
+      expect(screen.getByText('内存')).toBeInTheDocument();
+      expect(screen.getByText('资源监控')).toBeInTheDocument();
+      expect(screen.getByText('系统负载 (1min)')).toBeInTheDocument();
+      expect(screen.getByText('内存使用')).toBeInTheDocument();
+      expect(screen.getByText('磁盘数量')).toBeInTheDocument();
     });
   });
 

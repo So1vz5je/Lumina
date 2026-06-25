@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Card, Row, Col, Progress, Typography, Descriptions, Spin, Table, Tag, List, Input, Button, Space, Statistic, Checkbox, Popover, Dropdown, Modal, Select, Upload, message, Empty, Tabs, Switch, Alert } from 'antd';
+import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { Card, Row, Col, Progress, Typography, Descriptions, Spin, Table, Tag, List, Input, Button, Space, Statistic, Checkbox, Popover, Dropdown, Modal, Select, Upload, message, Empty, Tabs, Switch, Alert, Collapse } from 'antd';
 import { invoke } from '@tauri-apps/api/core';
 import { ReloadOutlined, UserOutlined, ApiOutlined, DatabaseOutlined, DesktopOutlined, SettingOutlined, DownloadOutlined, EyeOutlined, NumberOutlined, UploadOutlined, MoreOutlined, SearchOutlined, FileSearchOutlined } from '@ant-design/icons';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -13,6 +13,8 @@ import type {
     WindowsDatabaseColumn,
     WindowsDatabaseEngine,
     WindowsDatabaseInstance,
+    WindowsDatabaseMutationRequest,
+    WindowsDatabaseMutationResponse,
     WindowsDatabaseTableRef,
 } from '../modules/windowsDatabase/types';
 import { isTauriRuntime } from '../utils/runtime';
@@ -50,6 +52,14 @@ interface WindowsDatabaseReadonlyRequest {
 }
 
 interface WindowsDatabaseReadonlyCommandResult {
+    success: boolean;
+    stdout: string;
+    stderr: string;
+    exitCode?: number;
+    exit_code?: number;
+}
+
+interface WindowsDatabaseMutationCommandResult {
     success: boolean;
     stdout: string;
     stderr: string;
@@ -332,6 +342,314 @@ const normalizeWindowsDatabaseReadonlyResponse = (
         default:
             return {};
     }
+};
+
+// 本地系统信息组件（优化版）
+const LocalSystemInfoView = ({ systemInfo }: { systemInfo: SystemInfo }) => {
+    const memoryPercent = useMemo(
+        () => Math.round((systemInfo.used_memory_gb / systemInfo.total_memory_gb) * 100),
+        [systemInfo.used_memory_gb, systemInfo.total_memory_gb]
+    );
+
+    const cpuUsage = useMemo(() => Math.round(systemInfo.cpu_usage), [systemInfo.cpu_usage]);
+
+    const formatUptime = (seconds: number) => {
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (days > 0) return `${days}天${hours}小时`;
+        if (hours > 0) return `${hours}小时${minutes}分钟`;
+        return `${minutes}分钟`;
+    };
+
+    return (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            {/* 顶部横幅 */}
+            <Card size="small">
+                <Row align="middle" gutter={24}>
+                    <Col flex="auto">
+                        <Space size="middle">
+                            <DesktopOutlined style={{ fontSize: 24, color: '#1890ff' }} />
+                            <div>
+                                <Title level={4} style={{ margin: 0 }}>{systemInfo.hostname}</Title>
+                                <Text type="secondary">{systemInfo.os_name} ({systemInfo.architecture})</Text>
+                            </div>
+                        </Space>
+                    </Col>
+                    <Col>
+                        <Statistic title="CPU" value={cpuUsage} suffix="%" valueStyle={{ fontSize: 20 }} />
+                    </Col>
+                    <Col>
+                        <Statistic
+                            title="内存"
+                            value={`${systemInfo.used_memory_gb.toFixed(1)}/${systemInfo.total_memory_gb.toFixed(1)}`}
+                            suffix="GB"
+                            valueStyle={{ fontSize: 20 }}
+                        />
+                    </Col>
+                    <Col>
+                        <Statistic title="运行时间" value={formatUptime(systemInfo.uptime_seconds)} valueStyle={{ fontSize: 16 }} />
+                    </Col>
+                </Row>
+            </Card>
+
+            {/* 资源监控 */}
+            <Card size="small" title="资源监控">
+                <Row gutter={24}>
+                    <Col span={8}>
+                        <Statistic
+                            title="CPU 使用率"
+                            value={cpuUsage}
+                            suffix="%"
+                            valueStyle={{ color: cpuUsage > 80 ? '#cf1322' : '#3f8600', fontSize: 28 }}
+                        />
+                        <Progress
+                            percent={cpuUsage}
+                            strokeColor={cpuUsage > 80 ? '#cf1322' : '#52c41a'}
+                            style={{ marginTop: 8 }}
+                        />
+                        <Text type="secondary">{systemInfo.cpu_model}</Text>
+                    </Col>
+                    <Col span={8}>
+                        <Statistic
+                            title="内存使用"
+                            value={memoryPercent}
+                            suffix="%"
+                            valueStyle={{ color: memoryPercent > 80 ? '#cf1322' : '#3f8600', fontSize: 28 }}
+                        />
+                        <Progress
+                            percent={memoryPercent}
+                            strokeColor={memoryPercent > 80 ? '#cf1322' : '#52c41a'}
+                            style={{ marginTop: 8 }}
+                        />
+                        <Text type="secondary">
+                            {systemInfo.used_memory_gb.toFixed(1)} / {systemInfo.total_memory_gb.toFixed(1)} GB
+                        </Text>
+                    </Col>
+                    <Col span={8}>
+                        <Statistic
+                            title="CPU 核心"
+                            value={systemInfo.cpu_cores}
+                            suffix="核"
+                            valueStyle={{ fontSize: 28 }}
+                        />
+                        <div style={{ marginTop: 16 }}>
+                            <Text type="secondary">磁盘数量: {systemInfo.disks.length}</Text>
+                        </div>
+                    </Col>
+                </Row>
+            </Card>
+
+            {/* 详细信息 */}
+            <Collapse>
+                <Collapse.Panel header="系统详情" key="system">
+                    <Descriptions size="small" column={2} bordered>
+                        <Descriptions.Item label="操作系统">{systemInfo.os_name}</Descriptions.Item>
+                        <Descriptions.Item label="系统版本">{systemInfo.os_version}</Descriptions.Item>
+                        <Descriptions.Item label="内核版本">{systemInfo.kernel_version}</Descriptions.Item>
+                        <Descriptions.Item label="架构">{systemInfo.architecture}</Descriptions.Item>
+                        <Descriptions.Item label="主机名">{systemInfo.hostname}</Descriptions.Item>
+                        <Descriptions.Item label="IP地址">{systemInfo.ip_addresses.join(', ') || '-'}</Descriptions.Item>
+                        <Descriptions.Item label="开机时间">{systemInfo.boot_time_str}</Descriptions.Item>
+                        <Descriptions.Item label="时区">{systemInfo.timezone}</Descriptions.Item>
+                        <Descriptions.Item label="当前时间" span={2}>{systemInfo.current_time}</Descriptions.Item>
+                    </Descriptions>
+                </Collapse.Panel>
+                {systemInfo.disks.length > 0 && (
+                    <Collapse.Panel header="磁盘详情" key="disks">
+                        <Table
+                            dataSource={systemInfo.disks}
+                            columns={[
+                                { title: '挂载点', dataIndex: 'mount', key: 'mount' },
+                                { title: '大小', dataIndex: 'size', key: 'size', width: 100 },
+                                { title: '已用', dataIndex: 'used', key: 'used', width: 100 },
+                                { title: '可用', dataIndex: 'avail', key: 'avail', width: 100 },
+                                {
+                                    title: '使用率',
+                                    dataIndex: 'percent',
+                                    key: 'percent',
+                                    width: 180,
+                                    render: (v: number) => (
+                                        <Progress
+                                            percent={v}
+                                            size="small"
+                                            status={v > 90 ? 'exception' : 'normal'}
+                                        />
+                                    )
+                                },
+                            ]}
+                            size="small"
+                            pagination={false}
+                            scroll={{ y: 300 }}
+                        />
+                    </Collapse.Panel>
+                )}
+            </Collapse>
+        </Space>
+    );
+};
+
+// 远程系统信息组件（优化版）
+const RemoteSystemInfoView = ({ systemInfo }: { systemInfo: RemoteSystemInfo }) => {
+    const memPercent = useMemo(
+        () => Math.round(systemInfo.mem_percent || 0),
+        [systemInfo.mem_percent]
+    );
+
+    const loadOneMinute = useMemo(
+        () => Number.parseFloat((systemInfo.load_avg || '0').split(',')[0] || '0'),
+        [systemInfo.load_avg]
+    );
+
+    const loadPressure = useMemo(() => {
+        if (systemInfo.cpu_cores > 0 && Number.isFinite(loadOneMinute)) {
+            return Math.round((loadOneMinute / systemInfo.cpu_cores) * 100);
+        }
+        return 0;
+    }, [loadOneMinute, systemInfo.cpu_cores]);
+
+    const sysInfoData = useMemo(() => {
+        return [
+            { key: 'hostname', label: '主机名', value: systemInfo.hostname },
+            { key: 'os_type', label: '操作系统类型', value: systemInfo.os_type },
+            { key: 'os_name', label: '操作系统版本', value: systemInfo.os_name || systemInfo.os_version },
+            { key: 'pretty_name', label: '发行版名称', value: systemInfo.pretty_name },
+            { key: 'kernel', label: '内核版本', value: systemInfo.kernel },
+            { key: 'architecture', label: '系统架构', value: systemInfo.architecture },
+            { key: 'cpu_model', label: 'CPU型号', value: systemInfo.cpu_model },
+            { key: 'cpu_cores', label: 'CPU核心数', value: systemInfo.cpu_cores ? String(systemInfo.cpu_cores) : undefined },
+            { key: 'ip_address', label: 'IP地址', value: systemInfo.ip_address },
+            { key: 'uptime', label: '运行时间', value: systemInfo.uptime },
+            { key: 'load_avg', label: '系统负载', value: systemInfo.load_avg },
+        ].filter(item => item.value && item.value !== '-' && item.value !== '0');
+    }, [systemInfo]);
+
+    return (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            {/* 顶部横幅 */}
+            <Card size="small">
+                <Row align="middle" gutter={24}>
+                    <Col flex="auto">
+                        <Space size="middle">
+                            <DesktopOutlined style={{ fontSize: 24, color: '#1890ff' }} />
+                            <div>
+                                <Title level={4} style={{ margin: 0 }}>{systemInfo.hostname}</Title>
+                                <Text type="secondary">{systemInfo.pretty_name || systemInfo.os_type}</Text>
+                            </div>
+                        </Space>
+                    </Col>
+                    <Col>
+                        <Statistic
+                            title="负载"
+                            value={loadOneMinute.toFixed(2)}
+                            valueStyle={{ fontSize: 20, color: loadPressure > 100 ? '#cf1322' : '#3f8600' }}
+                        />
+                    </Col>
+                    <Col>
+                        <Statistic
+                            title="内存"
+                            value={`${systemInfo.mem_used}/${systemInfo.mem_total}`}
+                            valueStyle={{ fontSize: 20 }}
+                        />
+                    </Col>
+                    <Col>
+                        <Statistic title="运行时间" value={systemInfo.uptime} valueStyle={{ fontSize: 16 }} />
+                    </Col>
+                </Row>
+            </Card>
+
+            {/* 资源监控 */}
+            <Card size="small" title="资源监控">
+                <Row gutter={24}>
+                    <Col span={8}>
+                        <Statistic
+                            title="系统负载 (1min)"
+                            value={loadOneMinute.toFixed(2)}
+                            valueStyle={{ color: loadPressure > 100 ? '#cf1322' : '#3f8600', fontSize: 28 }}
+                        />
+                        <Progress
+                            percent={Math.min(loadPressure, 100)}
+                            strokeColor={loadPressure > 100 ? '#cf1322' : '#52c41a'}
+                            status={loadPressure > 100 ? 'exception' : 'normal'}
+                            style={{ marginTop: 8 }}
+                        />
+                        <Text type="secondary">
+                            {systemInfo.cpu_cores} 核心 {loadPressure > 100 && '(过载)'}
+                        </Text>
+                    </Col>
+                    <Col span={8}>
+                        <Statistic
+                            title="内存使用"
+                            value={memPercent}
+                            suffix="%"
+                            valueStyle={{ color: memPercent > 80 ? '#cf1322' : '#3f8600', fontSize: 28 }}
+                        />
+                        <Progress
+                            percent={memPercent}
+                            strokeColor={memPercent > 80 ? '#cf1322' : '#52c41a'}
+                            style={{ marginTop: 8 }}
+                        />
+                        <Text type="secondary">{systemInfo.mem_used} / {systemInfo.mem_total}</Text>
+                    </Col>
+                    <Col span={8}>
+                        <Statistic
+                            title="磁盘数量"
+                            value={systemInfo.disks.length}
+                            valueStyle={{ fontSize: 28 }}
+                        />
+                        <div style={{ marginTop: 16 }}>
+                            <Text type="secondary">
+                                最高使用率: {Math.max(...systemInfo.disks.map(d => d.percent))}%
+                            </Text>
+                        </div>
+                    </Col>
+                </Row>
+            </Card>
+
+            {/* 详细信息 */}
+            <Collapse>
+                <Collapse.Panel header="系统详情" key="system">
+                    <Descriptions size="small" column={2} bordered>
+                        {sysInfoData.map(item => (
+                            <Descriptions.Item label={item.label} key={item.key}>
+                                {item.value}
+                            </Descriptions.Item>
+                        ))}
+                    </Descriptions>
+                </Collapse.Panel>
+                {systemInfo.disks.length > 0 && (
+                    <Collapse.Panel header="磁盘详情" key="disks">
+                        <Table
+                            dataSource={systemInfo.disks}
+                            columns={[
+                                { title: '挂载点', dataIndex: 'mount', key: 'mount' },
+                                { title: '大小', dataIndex: 'size', key: 'size', width: 100 },
+                                { title: '已用', dataIndex: 'used', key: 'used', width: 100 },
+                                { title: '可用', dataIndex: 'avail', key: 'avail', width: 100 },
+                                {
+                                    title: '使用率',
+                                    dataIndex: 'percent',
+                                    key: 'percent',
+                                    width: 180,
+                                    render: (v: number) => (
+                                        <Progress
+                                            percent={v}
+                                            size="small"
+                                            status={v > 90 ? 'exception' : 'normal'}
+                                        />
+                                    )
+                                },
+                            ]}
+                            size="small"
+                            pagination={false}
+                            scroll={{ y: 300 }}
+                            rowKey="mount"
+                        />
+                    </Collapse.Panel>
+                )}
+            </Collapse>
+        </Space>
+    );
 };
 
 interface ModuleDetailProps {
@@ -1361,6 +1679,30 @@ export default function ModuleDetail({
         }
 
         return normalizeWindowsDatabaseReadonlyResponse(request, result.stdout || '');
+    }, []);
+
+    const requestWindowsDatabaseMutation = useCallback(async (
+        request: WindowsDatabaseMutationRequest,
+    ): Promise<WindowsDatabaseMutationResponse> => {
+        const result = await invoke<WindowsDatabaseMutationCommandResult>('windows_database_mutation', { request });
+        if (!result.success) {
+            throw new Error(result.stderr || '\u5199\u5165\u5931\u8d25\uff0c\u672a\u4fee\u6539\u6570\u636e');
+        }
+
+        const stdout = result.stdout?.trim() ?? '';
+        if (!stdout) {
+            return { affectedRows: null, message: '\u5199\u5165\u5b8c\u6210' };
+        }
+
+        try {
+            const parsed = JSON.parse(stdout) as Partial<WindowsDatabaseMutationResponse>;
+            return {
+                affectedRows: typeof parsed.affectedRows === 'number' ? parsed.affectedRows : null,
+                message: parsed.message || '\u5199\u5165\u5b8c\u6210',
+            };
+        } catch {
+            return { affectedRows: null, message: stdout || '\u5199\u5165\u5b8c\u6210' };
+        }
     }, []);
 
     const initTerminalPrompt = async () => {
@@ -10085,8 +10427,12 @@ export default function ModuleDetail({
     const renderContent = () => {
         if (moduleKey === 'terminal') return renderTerminal();
         if (moduleKey === 'file_manager') return renderFileManager();
-        if (moduleKey === 'system_info' && mode === 'local') return renderLocalSystemInfo();
-        if (moduleKey === 'system_info' && mode === 'remote') return renderRemoteSystemInfo();
+        if (moduleKey === 'system_info' && mode === 'local') {
+            return systemInfo ? <LocalSystemInfoView systemInfo={systemInfo} /> : <Spin tip="正在加载系统信息..." />;
+        }
+        if (moduleKey === 'system_info' && mode === 'remote') {
+            return remoteSystemInfo ? <RemoteSystemInfoView systemInfo={remoteSystemInfo} /> : <Spin tip="正在加载系统信息..." />;
+        }
         if (collectionDiagnostic) return renderCollectionDiagnostic();
         if (moduleKey === 'suspicious_files') return <>{renderSuspiciousFiles()}</>;
         if (moduleKey === 'webshell_scan') return <>{renderWebshellScan()}</>;
@@ -10533,6 +10879,7 @@ export default function ModuleDetail({
                     <WindowsDatabaseWorkbench
                         instance={selectedWindowsDatabaseInstance}
                         onRequest={requestWindowsDatabaseReadonly}
+                        onMutation={requestWindowsDatabaseMutation}
                     />
                 ) : null}
             </Modal>

@@ -85,7 +85,7 @@ function mockWindowsLocalCommand(stdout: unknown) {
     }
 
     throw new Error(`Unexpected command: ${command}`);
-  });
+  }, 15000);
 }
 
 describe('Windows local analysis commands', () => {
@@ -369,6 +369,105 @@ describe('Windows local analysis commands', () => {
     fireEvent.click(screen.getByRole('button', { name: /查看详情/ }));
 
     await waitFor(() => expect(screen.getByText('master')).toBeInTheDocument());
+  });
+
+  it('routes Windows database controlled mutations through the dedicated command', async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    let previewCount = 0;
+
+    invokeMock.mockImplementation(async (command: string, args?: any) => {
+      if (command === 'execute_local_command') {
+        return {
+          success: true,
+          stdout: [
+            '===DB_SERVICES===',
+            JSON.stringify([
+              {
+                Name: 'MSSQLSERVER',
+                DisplayName: 'SQL Server (MSSQLSERVER)',
+                State: 'Running',
+                StartMode: 'Auto',
+                PathName: 'C:\\Program Files\\Microsoft SQL Server\\MSSQL16.MSSQLSERVER\\MSSQL\\Binn\\sqlservr.exe',
+                ProcessId: 1234,
+              },
+            ]),
+            '===DB_PORTS===',
+            '[]',
+            '===DB_PROCESSES===',
+            '[]',
+            '===DB_INSTALLS===',
+            '[]',
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+
+      if (command === 'windows_database_readonly') {
+        const action = args?.request?.action;
+        if (action === 'listDatabases') {
+          return { success: true, stdout: JSON.stringify({ databases: ['appdb'] }), stderr: '' };
+        }
+        if (action === 'listTables') {
+          return { success: true, stdout: JSON.stringify({ tables: [{ schema: 'dbo', name: 'users' }] }), stderr: '' };
+        }
+        if (action === 'describeTable') {
+          return {
+            success: true,
+            stdout: JSON.stringify({
+              columns: [
+                { name: 'id', dataType: 'int', nullable: false, key: 'PRI' },
+                { name: 'email', dataType: 'varchar(255)', nullable: false },
+              ],
+            }),
+            stderr: '',
+          };
+        }
+        if (action === 'previewTable') {
+          previewCount += 1;
+          return {
+            success: true,
+            stdout: JSON.stringify({
+              columns: ['id', 'email'],
+              rows: [{ id: '7', email: previewCount > 1 ? 'new@example.com' : 'old@example.com' }],
+              rowCount: 1,
+              truncated: false,
+            }),
+            stderr: '',
+          };
+        }
+      }
+
+      if (command === 'windows_database_mutation') {
+        expect(args?.request).toEqual(
+          expect.objectContaining({
+            action: 'updateRow',
+            values: { email: 'new@example.com' },
+            rowIdentity: { columns: [{ name: 'id', value: '7' }] },
+          }),
+        );
+        return { success: true, stdout: JSON.stringify({ affectedRows: 1, message: 'Row updated' }), stderr: '' };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    renderWindowsModule('database');
+
+    await waitFor(() => expect(screen.getByText('SQL Server (MSSQLSERVER)')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /查看详情/ }));
+    expect(await screen.findByText('appdb')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('appdb'));
+    fireEvent.click(await screen.findByText('users'));
+    expect(await screen.findByText('id')).toBeInTheDocument();
+    fireEvent.click(document.querySelector('[id$="-tab-preview"]') as HTMLElement);
+    expect(await screen.findByText('old@example.com')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: /编辑模式/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /编辑/ }));
+    fireEvent.change(screen.getByLabelText('email'), { target: { value: 'new@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('windows_database_mutation', expect.anything()));
+    expect(await screen.findByText('new@example.com')).toBeInTheDocument();
   });
 
   it('uses Windows-specific table column labels for local modules', () => {

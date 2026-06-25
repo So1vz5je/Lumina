@@ -305,7 +305,8 @@ describe('App authorization gate', () => {
     });
 
     expect(container.querySelector('.analysis-content')).toHaveClass('linux-remote-content');
-    expect(await screen.findByText('远程健康摘要')).toBeInTheDocument();
+    // 新版 UI 不再显示"远程健康摘要"，而是显示"运行时间"等关键指标
+    expect(await screen.findByText('运行时间')).toBeInTheDocument();
   });
 
   it('uses the flush content layer for Windows local scan and results pages', async () => {
