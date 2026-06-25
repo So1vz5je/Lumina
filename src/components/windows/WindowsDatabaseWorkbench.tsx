@@ -1,14 +1,22 @@
-import { Alert, Button, Empty, Input, InputNumber, Spin, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Empty, Input, InputNumber, Popconfirm, Space, Spin, Switch, Table, Tabs, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
+import {
+  buildChangedWindowsDatabaseValues,
+  buildWindowsDatabaseRowIdentity,
+  getWindowsDatabaseEditableColumns,
+} from '../../modules/windowsDatabase/mutation';
 import { getReadonlyQueryHint } from '../../modules/windowsDatabase/sql';
 import type {
   WindowsDatabaseColumn,
   WindowsDatabaseEngine,
   WindowsDatabaseInstance,
+  WindowsDatabaseMutationRequest,
+  WindowsDatabaseMutationResponse,
   WindowsDatabasePreviewResult,
   WindowsDatabaseTableRef,
 } from '../../modules/windowsDatabase/types';
+import WindowsDatabaseRowEditor from './WindowsDatabaseRowEditor';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -20,6 +28,8 @@ const DEFAULT_READONLY_ROW_LIMIT = 50;
 const MAX_READONLY_ROW_LIMIT = 100;
 const EMPTY_QUERY_ERROR = '请输入只读 SQL';
 const READONLY_QUERY_ERROR = '只允许只读查询，禁止 INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/TRUNCATE 等写入语句';
+const MUTATION_GENERIC_ERROR = '写入失败，未修改数据';
+const MUTATION_MISSING_IDENTITY_ERROR = '当前表缺少主键或唯一键，不能编辑或删除行';
 
 const ENGINE_LABELS: Record<WindowsDatabaseEngine, string> = {
   mysql: 'MySQL',
@@ -65,6 +75,7 @@ interface WindowsDatabaseWorkbenchProps {
     sql?: string;
     rowLimit?: number;
   }) => Promise<any>;
+  onMutation?: (request: WindowsDatabaseMutationRequest) => Promise<WindowsDatabaseMutationResponse>;
 }
 
 interface QueryResultTable {
@@ -262,6 +273,7 @@ function renderListState(loading: boolean, error: string | null, emptyText: stri
 export function WindowsDatabaseWorkbench({
   instance,
   onRequest,
+  onMutation,
 }: WindowsDatabaseWorkbenchProps) {
   const [databases, setDatabases] = useState<string[]>([]);
   const [tables, setTables] = useState<WindowsDatabaseTableRef[]>([]);
@@ -273,14 +285,21 @@ export function WindowsDatabaseWorkbench({
   const [activeTab, setActiveTab] = useState('structure');
   const [sql, setSql] = useState(() => buildSampleSql(instance.engine, null, null, DEFAULT_READONLY_ROW_LIMIT));
   const [rowLimit, setRowLimit] = useState(DEFAULT_READONLY_ROW_LIMIT);
+  const [editMode, setEditMode] = useState(false);
+  const [rowEditorOpen, setRowEditorOpen] = useState(false);
+  const [rowEditorMode, setRowEditorMode] = useState<'insert' | 'update'>('insert');
+  const [editingRow, setEditingRow] = useState<Record<string, unknown> | null>(null);
   const [databaseLoading, setDatabaseLoading] = useState(false);
   const [tableLoading, setTableLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [queryLoading, setQueryLoading] = useState(false);
+  const [mutationLoading, setMutationLoading] = useState(false);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [tableError, setTableError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [mutationSuccess, setMutationSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -295,6 +314,11 @@ export function WindowsDatabaseWorkbench({
       setQueryResult(null);
       setSelectedDatabase(null);
       setSelectedTable(null);
+      setEditMode(false);
+      setRowEditorOpen(false);
+      setEditingRow(null);
+      setMutationError(null);
+      setMutationSuccess(null);
       setSql(buildSampleSql(instance.engine, null, null, DEFAULT_READONLY_ROW_LIMIT));
 
       try {
@@ -370,12 +394,46 @@ export function WindowsDatabaseWorkbench({
     [queryResult?.rows],
   );
 
+  const editableColumns = useMemo(() => getWindowsDatabaseEditableColumns(columns), [columns]);
+
+  const generatedColumnNames = useMemo(
+    () =>
+      columns
+        .filter((column) => {
+          const metadata = `${column.extra ?? ''} ${column.defaultValue ?? ''}`.toLowerCase();
+          return metadata.includes('generated') || metadata.includes('auto_increment') || metadata.includes('identity');
+        })
+        .map((column) => column.name),
+    [columns],
+  );
+
+  const openInsertEditor = () => {
+    setRowEditorMode('insert');
+    setEditingRow(null);
+    setMutationError(null);
+    setMutationSuccess(null);
+    setRowEditorOpen(true);
+  };
+
+  const openUpdateEditor = (row: Record<string, unknown>) => {
+    setRowEditorMode('update');
+    setEditingRow(row);
+    setMutationError(null);
+    setMutationSuccess(null);
+    setRowEditorOpen(true);
+  };
+
   const handleDatabaseSelect = async (database: string) => {
     setSelectedDatabase(database);
     setSelectedTable(null);
     setTables([]);
     setColumns([]);
     setPreviewResult(null);
+    setEditMode(false);
+    setRowEditorOpen(false);
+    setEditingRow(null);
+    setMutationError(null);
+    setMutationSuccess(null);
     setTableError(null);
     setDetailError(null);
     setSql(buildSampleSql(instance.engine, database, null, rowLimit));
@@ -397,6 +455,31 @@ export function WindowsDatabaseWorkbench({
     }
   };
 
+  const loadSelectedTableDetails = async (table: WindowsDatabaseTableRef, database: string) => {
+    const [columnResponse, previewResponse] = await Promise.all([
+      onRequest({
+        action: 'describeTable',
+        instanceId: instance.id,
+        engine: instance.engine,
+        database,
+        schema: table.schema,
+        table: table.name,
+      }),
+      onRequest({
+        action: 'previewTable',
+        instanceId: instance.id,
+        engine: instance.engine,
+        database,
+        schema: table.schema,
+        table: table.name,
+        rowLimit,
+      }),
+    ]);
+
+    setColumns(normalizeColumns((columnResponse as { columns?: unknown })?.columns));
+    setPreviewResult(normalizeResult(previewResponse));
+  };
+
   const handleTableSelect = async (table: WindowsDatabaseTableRef) => {
     if (!selectedDatabase) {
       return;
@@ -406,37 +489,102 @@ export function WindowsDatabaseWorkbench({
     setActiveTab('structure');
     setColumns([]);
     setPreviewResult(null);
+    setRowEditorOpen(false);
+    setEditingRow(null);
+    setMutationError(null);
+    setMutationSuccess(null);
     setDetailError(null);
     setDetailLoading(true);
     setSql(buildSampleSql(instance.engine, selectedDatabase, table, rowLimit));
 
     try {
-      const [columnResponse, previewResponse] = await Promise.all([
-        onRequest({
-          action: 'describeTable',
-          instanceId: instance.id,
-          engine: instance.engine,
-          database: selectedDatabase,
-          schema: table.schema,
-          table: table.name,
-        }),
-        onRequest({
-          action: 'previewTable',
-          instanceId: instance.id,
-          engine: instance.engine,
-          database: selectedDatabase,
-          schema: table.schema,
-          table: table.name,
-          rowLimit,
-        }),
-      ]);
-
-      setColumns(normalizeColumns((columnResponse as { columns?: unknown })?.columns));
-      setPreviewResult(normalizeResult(previewResponse));
+      await loadSelectedTableDetails(table, selectedDatabase);
     } catch (error) {
       setDetailError(error instanceof Error ? error.message : '加载表结构或预览失败');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const submitRowMutation = async (values: Record<string, string | number | boolean | null>) => {
+    if (!onMutation || !selectedDatabase || !selectedTable) {
+      return;
+    }
+
+    const rowIdentity =
+      rowEditorMode === 'update' && editingRow
+        ? buildWindowsDatabaseRowIdentity(columns, editingRow)
+        : undefined;
+
+    if (rowEditorMode === 'update' && !rowIdentity) {
+      setMutationError(MUTATION_MISSING_IDENTITY_ERROR);
+      return;
+    }
+
+    const requestValues =
+      rowEditorMode === 'update' && editingRow
+        ? buildChangedWindowsDatabaseValues(editingRow, values)
+        : values;
+
+    const request: WindowsDatabaseMutationRequest = {
+      action: rowEditorMode === 'insert' ? 'insertRow' : 'updateRow',
+      engine: instance.engine,
+      instanceId: instance.id,
+      database: selectedDatabase,
+      schema: selectedTable.schema,
+      table: selectedTable.name,
+      values: requestValues,
+      rowIdentity: rowIdentity ?? undefined,
+      generatedColumns: generatedColumnNames,
+    };
+
+    setMutationLoading(true);
+    setMutationError(null);
+    setMutationSuccess(null);
+
+    try {
+      const response = await onMutation(request);
+      setMutationSuccess(response.message);
+      setRowEditorOpen(false);
+      await loadSelectedTableDetails(selectedTable, selectedDatabase);
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : MUTATION_GENERIC_ERROR);
+    } finally {
+      setMutationLoading(false);
+    }
+  };
+
+  const deleteRow = async (row: Record<string, unknown>) => {
+    if (!onMutation || !selectedDatabase || !selectedTable) {
+      return;
+    }
+
+    const rowIdentity = buildWindowsDatabaseRowIdentity(columns, row);
+    if (!rowIdentity) {
+      setMutationError(MUTATION_MISSING_IDENTITY_ERROR);
+      return;
+    }
+
+    setMutationLoading(true);
+    setMutationError(null);
+    setMutationSuccess(null);
+
+    try {
+      const response = await onMutation({
+        action: 'deleteRow',
+        engine: instance.engine,
+        instanceId: instance.id,
+        database: selectedDatabase,
+        schema: selectedTable.schema,
+        table: selectedTable.name,
+        rowIdentity,
+      });
+      setMutationSuccess(response.message);
+      await loadSelectedTableDetails(selectedTable, selectedDatabase);
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : MUTATION_GENERIC_ERROR);
+    } finally {
+      setMutationLoading(false);
     }
   };
 
@@ -476,6 +624,43 @@ export function WindowsDatabaseWorkbench({
       setQueryLoading(false);
     }
   };
+
+  const previewActionColumns = editMode
+    ? [
+        {
+          title: '操作',
+          key: '__actions',
+          fixed: 'right' as const,
+          width: 150,
+          render: (_: unknown, row: Record<string, unknown>) => {
+            const identity = buildWindowsDatabaseRowIdentity(columns, row);
+
+            return (
+              <Space size={6}>
+                <Button
+                  size="small"
+                  aria-label="编辑"
+                  disabled={!identity || mutationLoading}
+                  onClick={() => openUpdateEditor(row)}
+                >
+                  编辑
+                </Button>
+                <Popconfirm
+                  title="确认删除这一行？"
+                  disabled={!identity || mutationLoading}
+                  onConfirm={() => void deleteRow(row)}
+                >
+                  <Button size="small" danger aria-label="删除" disabled={!identity || mutationLoading}>
+                    删除
+                  </Button>
+                </Popconfirm>
+              </Space>
+            );
+          },
+        },
+      ]
+    : [];
+  const previewTableColumns = [...previewColumns, ...previewActionColumns];
 
   return (
     <div style={styles.root}>
@@ -630,12 +815,37 @@ export function WindowsDatabaseWorkbench({
                 children: (
                   <div style={styles.tabPane}>
                     {detailError ? <Alert type="error" title={detailError} showIcon /> : null}
+                    {mutationError ? <Alert type="error" title={mutationError} showIcon /> : null}
+                    {mutationSuccess ? <Alert type="success" title={mutationSuccess} showIcon /> : null}
                     <div style={styles.tabSummary}>
                       <Text type="secondary">
                         {previewResult
                           ? `返回 ${previewResult.rowCount} 行${previewResult.truncated ? '，结果已截断' : ''}`
                           : '预览固定行数的原始数据'}
                       </Text>
+                    </div>
+                    <div style={styles.queryToolbar}>
+                      <Space size={8}>
+                        <Text type="secondary">编辑模式</Text>
+                        <Switch
+                          size="small"
+                          checked={editMode}
+                          onChange={setEditMode}
+                          aria-label="编辑模式"
+                          disabled={!onMutation}
+                        />
+                      </Space>
+                      {editMode ? (
+                        <Button
+                          size="small"
+                          type="primary"
+                          aria-label="新增行"
+                          onClick={openInsertEditor}
+                          disabled={!selectedTable || !onMutation || mutationLoading}
+                        >
+                          新增行
+                        </Button>
+                      ) : null}
                     </div>
                     <div style={styles.tablePanel}>
                       <Spin spinning={detailLoading}>
@@ -648,7 +858,7 @@ export function WindowsDatabaseWorkbench({
                             rowKey="__workbenchRowKey"
                             scroll={{ y: TABLE_SCROLL_HEIGHT, x: 'max-content' }}
                             dataSource={previewRows}
-                            columns={previewColumns}
+                            columns={previewTableColumns}
                           />
                         )}
                       </Spin>
@@ -727,6 +937,14 @@ export function WindowsDatabaseWorkbench({
           />
         </div>
       </div>
+      <WindowsDatabaseRowEditor
+        open={rowEditorOpen}
+        mode={rowEditorMode}
+        columns={editableColumns}
+        initialValues={editingRow ?? {}}
+        onCancel={() => setRowEditorOpen(false)}
+        onSubmit={(values) => void submitRowMutation(values)}
+      />
     </div>
   );
 }

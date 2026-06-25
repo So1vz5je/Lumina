@@ -47,6 +47,22 @@ beforeAll(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverMock);
 });
 
+function mysqlWorkbenchInstance(): WindowsDatabaseInstance {
+  return {
+    id: 'mysql:127.0.0.1:3306',
+    engine: 'mysql',
+    displayName: 'MySQL',
+    source: 'port',
+    status: 'running',
+    path: 'C:\\Program Files\\MySQL\\bin\\mysqld.exe',
+    version: '8.0',
+    host: '127.0.0.1',
+    port: 3306,
+    credentialMode: 'detected',
+    credentialLabel: 'Detected from analyzer',
+  };
+}
+
 describe('windows database detail contract', () => {
   it('matches the supported engines and actions contract', () => {
     const engines = ['mysql', 'sqlserver', 'postgresql'] as const satisfies readonly WindowsDatabaseEngine[];
@@ -246,5 +262,124 @@ describe('windows database detail contract', () => {
         rowLimit: 100,
       }),
     );
+  });
+
+  it('keeps controlled CRUD disabled until edit mode is enabled', async () => {
+    const onRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ databases: ['appdb'] })
+      .mockResolvedValueOnce({ tables: [{ schema: 'dbo', name: 'users' }] })
+      .mockResolvedValueOnce({
+        columns: [
+          { name: 'id', dataType: 'int', nullable: false, key: 'PRI' },
+          { name: 'email', dataType: 'varchar(255)', nullable: false },
+        ],
+      })
+      .mockResolvedValueOnce({
+        columns: ['id', 'email'],
+        rows: [{ id: '7', email: 'old@example.com' }],
+        rowCount: 1,
+        truncated: false,
+      });
+    const onMutation = vi.fn();
+    const { container } = render(
+      <WindowsDatabaseWorkbench instance={mysqlWorkbenchInstance()} onRequest={onRequest} onMutation={onMutation} />,
+    );
+
+    expect(await screen.findByText('appdb')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('appdb'));
+    fireEvent.click(await screen.findByText('users'));
+    expect(await screen.findByText('id')).toBeInTheDocument();
+    fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
+    expect(await screen.findByText('old@example.com')).toBeInTheDocument();
+
+    expect(screen.queryByRole('button', { name: /新增行/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: /编辑模式/ }));
+    expect(screen.getByRole('button', { name: /新增行/ })).toBeInTheDocument();
+  });
+
+  it('submits a controlled row update and refreshes preview', async () => {
+    const onRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ databases: ['appdb'] })
+      .mockResolvedValueOnce({ tables: [{ schema: 'dbo', name: 'users' }] })
+      .mockResolvedValueOnce({
+        columns: [
+          { name: 'id', dataType: 'int', nullable: false, key: 'PRI' },
+          { name: 'email', dataType: 'varchar(255)', nullable: false },
+        ],
+      })
+      .mockResolvedValueOnce({
+        columns: ['id', 'email'],
+        rows: [{ id: '7', email: 'old@example.com' }],
+        rowCount: 1,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        columns: [
+          { name: 'id', dataType: 'int', nullable: false, key: 'PRI' },
+          { name: 'email', dataType: 'varchar(255)', nullable: false },
+        ],
+      })
+      .mockResolvedValueOnce({
+        columns: ['id', 'email'],
+        rows: [{ id: '7', email: 'new@example.com' }],
+        rowCount: 1,
+        truncated: false,
+      });
+    const onMutation = vi.fn().mockResolvedValueOnce({ affectedRows: 1, message: 'Row updated' });
+    const { container } = render(
+      <WindowsDatabaseWorkbench instance={mysqlWorkbenchInstance()} onRequest={onRequest} onMutation={onMutation} />,
+    );
+
+    expect(await screen.findByText('appdb')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('appdb'));
+    fireEvent.click(await screen.findByText('users'));
+    expect(await screen.findByText('id')).toBeInTheDocument();
+    fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
+    expect(await screen.findByText('old@example.com')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: /编辑模式/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /编辑/ }));
+    fireEvent.change(screen.getByLabelText('email'), { target: { value: 'new@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    await waitFor(() =>
+      expect(onMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'updateRow',
+          values: { email: 'new@example.com' },
+          rowIdentity: { columns: [{ name: 'id', value: '7' }] },
+        }),
+      ),
+    );
+    expect(await screen.findByText('new@example.com')).toBeInTheDocument();
+  });
+
+  it('disables edit and delete for rows without identity', async () => {
+    const onRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ databases: ['appdb'] })
+      .mockResolvedValueOnce({ tables: [{ schema: 'dbo', name: 'logs' }] })
+      .mockResolvedValueOnce({ columns: [{ name: 'message', dataType: 'text', nullable: false }] })
+      .mockResolvedValueOnce({
+        columns: ['message'],
+        rows: [{ message: 'hello' }],
+        rowCount: 1,
+        truncated: false,
+      });
+    const { container } = render(
+      <WindowsDatabaseWorkbench instance={mysqlWorkbenchInstance()} onRequest={onRequest} onMutation={vi.fn()} />,
+    );
+
+    expect(await screen.findByText('appdb')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('appdb'));
+    fireEvent.click(await screen.findByText('logs'));
+    expect(await screen.findByText('message')).toBeInTheDocument();
+    fireEvent.click(container.querySelector('[id$="-tab-preview"]') as HTMLElement);
+    expect(await screen.findByText('hello')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('switch', { name: /编辑模式/ }));
+
+    expect(await screen.findByRole('button', { name: /编辑/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /删除/ })).toBeDisabled();
   });
 });
