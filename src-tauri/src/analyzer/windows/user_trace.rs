@@ -1,4 +1,5 @@
 use crate::analyzer::{AnalysisResult, Analyzer};
+use encoding_rs::GBK;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::os::windows::process::CommandExt;
@@ -32,6 +33,20 @@ pub struct LoginSession {
 pub struct UserTraceAnalyzer;
 
 impl UserTraceAnalyzer {
+    fn decode_command_output(bytes: &[u8]) -> String {
+        match String::from_utf8(bytes.to_vec()) {
+            Ok(text) => text,
+            Err(_) => {
+                let (text, _, had_errors) = GBK.decode(bytes);
+                if had_errors {
+                    String::from_utf8_lossy(bytes).to_string()
+                } else {
+                    text.into_owned()
+                }
+            }
+        }
+    }
+
     /// 解析 net user 输出
     fn parse_user_list(output: &str) -> Vec<String> {
         let mut users = Vec::new();
@@ -70,7 +85,7 @@ impl UserTraceAnalyzer {
             .output()
             .ok()?;
 
-        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        let text = Self::decode_command_output(&output.stdout);
 
         let mut full_name = String::new();
         let mut comment = String::new();
@@ -251,7 +266,7 @@ impl Analyzer for UserTraceAnalyzer {
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .map(|o| Self::decode_command_output(&o.stdout))
             .unwrap_or_default();
         let user_names = Self::parse_user_list(&users_output);
 
@@ -261,7 +276,7 @@ impl Analyzer for UserTraceAnalyzer {
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .map(|o| Self::decode_command_output(&o.stdout))
             .unwrap_or_default();
         let admin_list = Self::parse_admin_group(&admins_output);
 
@@ -279,7 +294,7 @@ impl Analyzer for UserTraceAnalyzer {
             .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .map(|o| Self::decode_command_output(&o.stdout))
             .unwrap_or_default();
         let sessions = Self::parse_login_sessions(&sessions_output);
 
@@ -333,5 +348,20 @@ impl Analyzer for UserTraceAnalyzer {
             summary,
             details,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_gbk_user_names_from_net_output() {
+        let gbk_bytes = [0xb9, 0xdc, 0xc0, 0xed, 0xd4, 0xb1];
+
+        assert_eq!(
+            UserTraceAnalyzer::decode_command_output(&gbk_bytes),
+            "管理员"
+        );
     }
 }
