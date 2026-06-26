@@ -246,6 +246,33 @@ describe('AiAnalysis workspace', () => {
     expect(screen.getByText('this answer should remain')).toBeInTheDocument();
   });
 
+  it('keeps a late AI error visible after partial assistant content', async () => {
+    const { container } = render(<AiAnalysis {...props} />);
+
+    await screen.findByLabelText('AI conversation');
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'token',
+          content: 'partial answer',
+        },
+      });
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'error',
+          content: 'AI request returned HTTP 401: API key required for remote API access',
+        },
+      });
+    });
+
+    expect(screen.getByText('partial answer')).toBeInTheDocument();
+    expect(container.querySelector('.ai-message-body')).toHaveTextContent(
+      'API key required for remote API access',
+    );
+  });
+
   it('keeps a collapsed reasoning block collapsed after remounting', async () => {
     const first = render(<AiAnalysis {...props} />);
 

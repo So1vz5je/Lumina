@@ -625,7 +625,7 @@ fn build_agent_chat_messages(
     let mut messages = vec![
         json!({
             "role": "system",
-            "content": "你是 Lumina 应急响应分析助手。基于用户问题、工作区上下文和工具结果给出可执行、可验证的安全分析结论。输出中文，优先列出风险、证据、下一步操作。需要本机信息时使用唯一工具 run_command 执行本机命令或 python 命令。默认工作目录是当前机器工作区，不要从项目目录或全盘开始无边界递归扫描；需要大范围采集时先列范围、分页或把结果保存到工作区。Windows 目录和文件检查优先使用 PowerShell Get-ChildItem -LiteralPath，并优先验证具体路径是否存在。When scanResultCount=0, clearly state that there are no loaded scan results before trying extra collection commands. Do not keep retrying the same failing command style; after two similar failures, explain the failure and switch to a smaller verification step or ask for missing context. 需要管理员权限时，在 run_command 参数中设置 runAsAdmin=true 并说明 reason，等待用户批准；不要直接包装 Start-Process -Verb RunAs、runas、sudo、gsudo。"
+            "content": "你是 Lumina 应急响应分析助手。基于用户问题、工作区上下文和工具结果给出可执行、可验证的安全分析结论。输出中文，优先列出风险、证据、下一步操作。需要本机信息时使用唯一工具 run_command 执行本机命令或 python 命令。默认工作目录是当前机器工作区，不要从项目目录或全盘开始无边界递归扫描；需要大范围采集时先列范围、分页或把结果保存到工作区。Windows 目录和文件检查优先使用 PowerShell Get-ChildItem -LiteralPath，并优先验证具体路径是否存在。When scanResultCount=0, clearly state that there are no loaded scan results before trying extra collection commands. Do not keep retrying the same failing command style; after two similar failures, explain the failure and switch to a smaller verification step or ask for missing context. Security logon failure queries (Event ID 4625, 4771, 4776) require runAsAdmin=true immediately; do not conclude that no failed logons exist from a non-elevated Security query or from NoMatchingEventsFound until an elevated query succeeds. 需要管理员权限时，在 run_command 参数中设置 runAsAdmin=true 并说明 reason，等待用户批准；不要直接包装 Start-Process -Verb RunAs、runas、sudo、gsudo。"
         }),
         json!({
             "role": "system",
@@ -1042,6 +1042,16 @@ fn looks_like_elevation_request(command: &str) -> bool {
         })
 }
 
+fn looks_like_security_failed_logon_query(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    let targets_security_log = lower.contains("security")
+        && (lower.contains("get-winevent") || lower.contains("wevtutil"));
+    let targets_failed_logon = ["4625", "4771", "4776"]
+        .iter()
+        .any(|event_id| lower.contains(event_id));
+    targets_security_log && targets_failed_logon
+}
+
 #[cfg(test)]
 fn execute_shell_command(args: &Value, session_id: Option<&str>) -> String {
     let workspace = match workspace::current_workspace_paths() {
@@ -1067,6 +1077,48 @@ fn command_working_directory(args: &Value, workspace: &WorkspaceConfigView) -> S
     tool_arg_string(args, "workingDirectory").unwrap_or_else(|| workspace.root_path.clone())
 }
 
+#[cfg(windows)]
+fn looks_like_powershell_command(command_line: &str) -> bool {
+    let trimmed = command_line.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("powershell ")
+        || lower.starts_with("powershell.exe ")
+        || lower.starts_with("pwsh ")
+        || lower.starts_with("pwsh.exe ")
+        || lower.starts_with("cmd ")
+        || lower.starts_with("cmd.exe ")
+    {
+        return false;
+    }
+
+    const POWERSHELL_STARTS: &[&str] = &[
+        "get-",
+        "set-",
+        "new-",
+        "remove-",
+        "copy-",
+        "move-",
+        "rename-",
+        "test-",
+        "select-",
+        "where-",
+        "foreach-",
+        "format-",
+        "convertto-",
+        "convertfrom-",
+        "start-",
+        "stop-",
+        "restart-",
+        "out-",
+        "write-",
+        "$",
+    ];
+
+    POWERSHELL_STARTS
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
 fn build_shell_command(
     command_line: &str,
     workspace: &WorkspaceConfigView,
@@ -1075,6 +1127,36 @@ fn build_shell_command(
         let run_dir = Path::new(&workspace.temp_path).join("ai_run_command");
         fs::create_dir_all(&run_dir)
             .map_err(|err| format!("Failed to create AI command temp directory: {}", err))?;
+        #[cfg(windows)]
+        if looks_like_powershell_command(command_line) {
+            let script_path = run_dir.join(format!(
+                "run-{}-{}.ps1",
+                std::process::id(),
+                Local::now().timestamp_millis()
+            ));
+            let script = format!(
+                "$ErrorActionPreference = 'Continue'\r\n\
+                 $OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n\
+                 {}\r\n\
+                 $luminaSuccess = $?\r\n\
+                 $luminaExit = $LASTEXITCODE\r\n\
+                 if ($null -ne $luminaExit) {{ exit $luminaExit }}\r\n\
+                 if ($luminaSuccess) {{ exit 0 }} else {{ exit 1 }}\r\n",
+                command_line
+            );
+            fs::write(&script_path, script)
+                .map_err(|err| format!("Failed to write AI PowerShell script: {}", err))?;
+            let mut command = Command::new("powershell");
+            command.args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                &script_path.to_string_lossy(),
+            ]);
+            return Ok((command, Some(script_path)));
+        }
+
         let script_path = run_dir.join(format!(
             "run-{}-{}.cmd",
             std::process::id(),
@@ -1116,6 +1198,17 @@ fn execute_shell_command_with_workspace(
 
     let timeout_seconds = tool_arg_u64(args, "timeoutSeconds", 30, 1, 120);
     let working_directory = command_working_directory(args, workspace);
+    if looks_like_security_failed_logon_query(&command_line) {
+        return truncate_tool_output(
+            format!(
+                "command={}\nworkingDirectory={}\ntimeoutSeconds={}\ntimedOut=false\nexitCode=-1\nstdout:\n\nstderr:\nSecurity logon failure queries require runAsAdmin=true. Retry this exact query with runAsAdmin=true and a clear reason; do not conclude that no failed logons exist from a non-elevated Security log query.",
+                command_line,
+                working_directory,
+                timeout_seconds,
+            ),
+            24_000,
+        );
+    }
     if session_id.is_some_and(is_ai_session_cancelled) {
         return truncate_tool_output(
             format!(
@@ -2056,6 +2149,8 @@ mod tests {
         assert!(system_prompt.contains("Get-ChildItem -LiteralPath"));
         assert!(system_prompt.contains("Do not keep retrying"));
         assert!(system_prompt.contains("scanResultCount=0"));
+        assert!(system_prompt.contains("Security logon failure queries"));
+        assert!(system_prompt.contains("runAsAdmin=true"));
     }
 
     #[test]
@@ -2175,6 +2270,64 @@ mod tests {
         assert!(output.contains("timedOut=false"), "{output}");
         assert!(output.contains("exitCode=0"), "{output}");
         assert!(output.contains("lumina-python-ok"), "{output}");
+
+        std::fs::remove_dir_all(&root).expect("cleanup test workspace");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn run_command_tool_executes_bare_powershell_cmdlets_on_windows() {
+        let root =
+            std::env::temp_dir().join(format!("lumina ai powershell test {}", std::process::id()));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).expect("remove stale test workspace");
+        }
+        std::fs::create_dir_all(&root).expect("create powershell test root");
+        std::fs::write(root.join("sentinel.txt"), "ok").expect("write sentinel");
+        let workspace = crate::workspace::ensure_workspace_paths(&root).expect("workspace paths");
+        let output = execute_shell_command_with_workspace(
+            &json!({
+                "command": format!(
+                    "Get-ChildItem -LiteralPath \"{}\" | Select-Object -ExpandProperty Name",
+                    root.to_string_lossy()
+                ),
+                "timeoutSeconds": 5
+            }),
+            None,
+            &workspace,
+        );
+
+        assert!(output.contains("timedOut=false"), "{output}");
+        assert!(output.contains("exitCode=0"), "{output}");
+        assert!(output.contains("sentinel.txt"), "{output}");
+
+        std::fs::remove_dir_all(&root).expect("cleanup test workspace");
+    }
+
+    #[test]
+    fn run_command_tool_requires_admin_for_security_failed_logon_queries() {
+        let root = std::env::temp_dir().join(format!(
+            "lumina ai security log guard {}",
+            std::process::id()
+        ));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).expect("remove stale test workspace");
+        }
+        let workspace = crate::workspace::ensure_workspace_paths(&root).expect("workspace paths");
+        let output = execute_shell_command_with_workspace(
+            &json!({
+                "command": "powershell -Command \"Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625} -MaxEvents 1\"",
+                "timeoutSeconds": 5
+            }),
+            None,
+            &workspace,
+        );
+
+        assert!(output.contains("exitCode=-1"), "{output}");
+        assert!(
+            output.contains("Security logon failure queries require runAsAdmin=true"),
+            "{output}"
+        );
 
         std::fs::remove_dir_all(&root).expect("cleanup test workspace");
     }

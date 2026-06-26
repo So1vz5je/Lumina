@@ -744,21 +744,32 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
             setRunning(false);
             setPendingAdminApproval(null);
             setMessages((current) => {
-              return updateLatestAssistantMessage(current, (messageItem) => ({
-                ...messageItem,
-                content:
-                  payload.eventType === 'error' && payload.content && !messageItem.content
-                    ? payload.content
-                    : messageItem.content,
-                phase: payload.eventType === 'error' ? 'error' : 'done',
-                completedAt: Date.now(),
-                startedAt: messageItem.startedAt || Date.now(),
-                segments: completeOpenReasoningSegments(messageItem.segments || []),
-                thinkingCompletedAt:
-                  messageItem.reasoning && !messageItem.thinkingCompletedAt
-                    ? Date.now()
-                    : messageItem.thinkingCompletedAt,
-              }));
+              return updateLatestAssistantMessage(current, (messageItem) => {
+                const completedAt = Date.now();
+                const nextMessage: ChatMessage = {
+                  ...messageItem,
+                  phase: payload.eventType === 'error' ? 'error' : 'done',
+                  completedAt,
+                  startedAt: messageItem.startedAt || completedAt,
+                  segments: completeOpenReasoningSegments(messageItem.segments || [], completedAt),
+                  thinkingCompletedAt:
+                    messageItem.reasoning && !messageItem.thinkingCompletedAt
+                      ? completedAt
+                      : messageItem.thinkingCompletedAt,
+                };
+                if (payload.eventType !== 'error' || !payload.content) {
+                  return nextMessage;
+                }
+                const visibleError = `\n\n分析中断：${payload.content}`;
+                return appendStreamSegment(
+                  {
+                    ...nextMessage,
+                    content: `${nextMessage.content || ''}${visibleError}`,
+                  },
+                  'content',
+                  visibleError,
+                );
+              });
             });
             if (payload.eventType === 'error' && payload.content) {
               message.error(payload.content);
