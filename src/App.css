@@ -7169,9 +7169,57 @@ body {
   background: var(--ai-request-bg);
 }
 
+.ai-thinking-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  color: var(--ai-muted);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.ai-typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 12px;
+}
+
+.ai-typing-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: ai-typing-dot 1.05s infinite ease-in-out;
+}
+
+.ai-typing-dots span:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.ai-typing-dots span:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+@keyframes ai-typing-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+
+  40% {
+    opacity: 0.9;
+    transform: translateY(-3px);
+  }
+}
+
 .ai-reasoning {
-  margin: 0 0 12px;
-  padding: 0 0 0 12px;
+  margin: 0 0 16px;
+  padding: 0 0 0 13px;
   border: 0;
   border-left: 1px solid var(--ai-border);
   border-radius: 0;
@@ -7180,11 +7228,83 @@ body {
 }
 
 .ai-reasoning summary {
-  padding: 0 0 6px;
-  color: var(--ai-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 0 0 9px;
+  list-style: none;
+  color: var(--ai-text);
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
+  user-select: none;
+}
+
+.ai-reasoning summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-reasoning-mark {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--ai-accent);
+  border-radius: 999px;
+}
+
+.ai-reasoning-mark::before,
+.ai-reasoning-mark::after {
+  position: absolute;
+  inset: 2px -3px;
+  border: 1.5px solid var(--ai-accent);
+  border-radius: 999px;
+  content: '';
+}
+
+.ai-reasoning-mark::before {
+  transform: rotate(58deg);
+}
+
+.ai-reasoning-mark::after {
+  transform: rotate(-58deg);
+}
+
+.ai-reasoning.running .ai-reasoning-mark {
+  animation: ai-reasoning-pulse 1.4s infinite ease-in-out;
+}
+
+@keyframes ai-reasoning-pulse {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.ai-reasoning-label {
+  color: var(--ai-text);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.ai-reasoning-caret {
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-right: 1.5px solid var(--ai-muted);
+  border-bottom: 1.5px solid var(--ai-muted);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 160ms ease;
+}
+
+.ai-reasoning[open] .ai-reasoning-caret {
+  transform: translateY(1px) rotate(225deg);
 }
 
 .ai-reasoning .ai-markdown {

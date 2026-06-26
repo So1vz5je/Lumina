@@ -1,4 +1,5 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { invoke } from '@tauri-apps/api/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import AiAnalysis from './AiAnalysis';
 import type { AnalysisResult } from '../types/analysis';
@@ -33,6 +34,8 @@ describe('AiAnalysis workspace', () => {
       eventMock.streamHandler = handler;
       return vi.fn();
     });
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(undefined);
     vi.spyOn(Date, 'now').mockReturnValue(1700000000000);
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     globalThis.ResizeObserver = class ResizeObserver {
@@ -93,5 +96,58 @@ describe('AiAnalysis workspace', () => {
     expect(screen.getByText('cmd.exe')).toBeInTheDocument();
     expect(container.querySelector('.ai-markdown li')).toHaveTextContent('高危: 发现 cmd.exe');
     expect(container.querySelector('.ai-markdown pre code')).toHaveTextContent('Get-Process');
+  });
+
+  it('shows pending dots and a timed reasoning header while streaming', async () => {
+    const { container } = render(
+      <AiAnalysis
+        mode="本地分析"
+        osType="windows"
+        currentModule="安全日志"
+        scanResults={scanResults}
+      />,
+    );
+
+    await screen.findByText('AI 分析');
+    const input = container.querySelector('textarea');
+    const sendButton = container.querySelector('.ai-send-button');
+    expect(input).toBeInTheDocument();
+    expect(sendButton).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.change(input as HTMLTextAreaElement, { target: { value: '你是什么模型' } });
+      fireEvent.click(sendButton as HTMLButtonElement);
+    });
+
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('ai_send_message', expect.any(Object));
+    expect(container.querySelector('.ai-thinking-loading')).toBeInTheDocument();
+    expect(container.querySelectorAll('.ai-typing-dots span')).toHaveLength(3);
+
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'reasoning',
+          content: '1. **解析用户请求**\n',
+        },
+      });
+    });
+
+    expect(container.querySelector('.ai-reasoning')).toHaveClass('running');
+    expect(container.querySelector('.ai-reasoning-label')).toHaveTextContent('思考中');
+
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'token',
+          content: '我是 DeepSeek。',
+        },
+      });
+    });
+
+    expect(container.querySelector('.ai-reasoning')).toHaveClass('done');
+    expect(container.querySelector('.ai-reasoning-label')).toHaveTextContent('已思考');
+    expect(screen.getByText('我是 DeepSeek。')).toBeInTheDocument();
   });
 });

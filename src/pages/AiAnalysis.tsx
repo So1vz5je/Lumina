@@ -10,12 +10,17 @@ import { invoke } from '@tauri-apps/api/core';
 import type { AnalysisResult } from '../types/analysis';
 
 type ChatRole = 'user' | 'assistant';
+type ChatPhase = 'pending' | 'reasoning' | 'answering' | 'done' | 'error';
 
 interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
   reasoning?: string;
+  phase?: ChatPhase;
+  startedAt?: number;
+  thinkingCompletedAt?: number;
+  completedAt?: number;
 }
 
 interface AiStreamEvent {
@@ -33,6 +38,34 @@ interface AiAnalysisProps {
 }
 
 const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const createAssistantMessage = (phase: ChatPhase = 'pending'): ChatMessage => ({
+  id: `${makeId()}-assistant`,
+  role: 'assistant',
+  content: '',
+  phase,
+  startedAt: Date.now(),
+});
+
+const updateLatestAssistantMessage = (
+  current: ChatMessage[],
+  updater: (message: ChatMessage) => ChatMessage,
+): ChatMessage[] => {
+  const next = [...current];
+  const last = next[next.length - 1];
+  if (last?.role === 'assistant') {
+    next[next.length - 1] = updater(last);
+  } else {
+    next.push(updater(createAssistantMessage()));
+  }
+  return next;
+};
+
+const formatElapsedSeconds = (startedAt?: number, endedAt?: number): string => {
+  if (!startedAt || !endedAt) return '0 秒';
+  const elapsed = Math.max(0, Math.round((endedAt - startedAt) / 1000));
+  return `${elapsed} 秒`;
+};
 
 const summarizeScanResult = (result: AnalysisResult): string =>
   `${result.module_name}: ${result.status} - ${result.summary}`;
@@ -199,11 +232,22 @@ function MarkdownContent({ content }: { content: string }) {
   return <div className="ai-markdown">{blocks}</div>;
 }
 
+function ThinkingDots() {
+  return (
+    <span className="ai-typing-dots" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
 export default function AiAnalysis({ mode, osType, currentModule, scanResults }: AiAnalysisProps) {
   const [sessionId] = useState(() => makeId());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
+  const [clockTick, setClockTick] = useState(() => Date.now());
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const contextSummary = useMemo(
@@ -218,6 +262,12 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
   );
 
   useEffect(() => {
+    if (!running) return undefined;
+    const timer = window.setInterval(() => setClockTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+
+  useEffect(() => {
     let cleanup: (() => void) | undefined;
     let disposed = false;
 
@@ -229,31 +279,28 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
 
           if (payload.eventType === 'token') {
             setMessages((current) => {
-              const next = [...current];
-              const last = next[next.length - 1];
-              if (last?.role === 'assistant') {
-                next[next.length - 1] = { ...last, content: `${last.content}${payload.content}` };
-              } else {
-                next.push({ id: makeId(), role: 'assistant', content: payload.content });
-              }
-              return next;
+              return updateLatestAssistantMessage(current, (messageItem) => ({
+                ...messageItem,
+                content: `${messageItem.content}${payload.content}`,
+                phase: 'answering',
+                startedAt: messageItem.startedAt || Date.now(),
+                thinkingCompletedAt:
+                  messageItem.reasoning && !messageItem.thinkingCompletedAt
+                    ? Date.now()
+                    : messageItem.thinkingCompletedAt,
+              }));
             });
             return;
           }
 
           if (payload.eventType === 'reasoning') {
             setMessages((current) => {
-              const next = [...current];
-              const last = next[next.length - 1];
-              if (last?.role === 'assistant') {
-                next[next.length - 1] = {
-                  ...last,
-                  reasoning: `${last.reasoning || ''}${payload.content}`,
-                };
-              } else {
-                next.push({ id: makeId(), role: 'assistant', content: '', reasoning: payload.content });
-              }
-              return next;
+              return updateLatestAssistantMessage(current, (messageItem) => ({
+                ...messageItem,
+                reasoning: `${messageItem.reasoning || ''}${payload.content}`,
+                phase: 'reasoning',
+                startedAt: messageItem.startedAt || Date.now(),
+              }));
             });
             return;
           }
@@ -264,6 +311,22 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
 
           if (payload.eventType === 'done' || payload.eventType === 'error') {
             setRunning(false);
+            setMessages((current) => {
+              return updateLatestAssistantMessage(current, (messageItem) => ({
+                ...messageItem,
+                content:
+                  payload.eventType === 'error' && payload.content && !messageItem.content
+                    ? payload.content
+                    : messageItem.content,
+                phase: payload.eventType === 'error' ? 'error' : 'done',
+                completedAt: Date.now(),
+                startedAt: messageItem.startedAt || Date.now(),
+                thinkingCompletedAt:
+                  messageItem.reasoning && !messageItem.thinkingCompletedAt
+                    ? Date.now()
+                    : messageItem.thinkingCompletedAt,
+              }));
+            });
             if (payload.eventType === 'error' && payload.content) {
               message.error(payload.content);
             }
@@ -299,10 +362,16 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
     const prompt = input.trim();
     if (!prompt || running) return;
 
-    const userMessage: ChatMessage = { id: makeId(), role: 'user', content: prompt };
-    setMessages((current) => [...current, userMessage]);
+    const startedAt = Date.now();
+    const userMessage: ChatMessage = { id: `${makeId()}-user`, role: 'user', content: prompt };
+    const assistantMessage: ChatMessage = {
+      ...createAssistantMessage('pending'),
+      startedAt,
+    };
+    setMessages((current) => [...current, userMessage, assistantMessage]);
     setInput('');
     setRunning(true);
+    setClockTick(startedAt);
 
     try {
       await invoke('ai_send_message', {
@@ -317,6 +386,15 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
       });
     } catch (error) {
       setRunning(false);
+      setMessages((current) =>
+        updateLatestAssistantMessage(current, (messageItem) => ({
+          ...messageItem,
+          content: `AI 分析启动失败: ${error}`,
+          phase: 'error',
+          completedAt: Date.now(),
+          startedAt: messageItem.startedAt || startedAt,
+        })),
+      );
       message.error(`AI 分析启动失败: ${error}`);
     }
   };
@@ -365,19 +443,44 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
               </div>
             </div>
           ) : (
-            messages.map((item) => (
-              <article className={`ai-line-message ${item.role}`} key={item.id}>
-                <div className="ai-message-body">
-                  {item.reasoning ? (
-                    <details className="ai-reasoning">
-                      <summary>思考</summary>
-                      <MarkdownContent content={item.reasoning} />
-                    </details>
-                  ) : null}
-                  {item.content ? <MarkdownContent content={item.content} /> : null}
-                </div>
-              </article>
-            ))
+            messages.map((item) => {
+              const isAssistant = item.role === 'assistant';
+              const isWaiting = isAssistant && item.phase === 'pending' && !item.reasoning && !item.content;
+              const reasoningDone =
+                Boolean(item.thinkingCompletedAt)
+                || item.phase === 'answering'
+                || item.phase === 'done'
+                || item.phase === 'error';
+              const reasoningEnd = item.thinkingCompletedAt || item.completedAt || clockTick;
+              const reasoningElapsed = formatElapsedSeconds(item.startedAt, reasoningEnd);
+              const reasoningLabel = reasoningDone
+                ? `已思考（用时 ${reasoningElapsed}）`
+                : `思考中（${reasoningElapsed}）`;
+
+              return (
+                <article className={`ai-line-message ${item.role}`} key={item.id}>
+                  <div className="ai-message-body">
+                    {isWaiting ? (
+                      <div className="ai-thinking-loading" role="status" aria-live="polite">
+                        <span>正在思考</span>
+                        <ThinkingDots />
+                      </div>
+                    ) : null}
+                    {item.reasoning ? (
+                      <details className={`ai-reasoning ${reasoningDone ? 'done' : 'running'}`} open>
+                        <summary>
+                          <span className="ai-reasoning-mark" aria-hidden="true" />
+                          <span className="ai-reasoning-label">{reasoningLabel}</span>
+                          <span className="ai-reasoning-caret" aria-hidden="true" />
+                        </summary>
+                        <MarkdownContent content={item.reasoning} />
+                      </details>
+                    ) : null}
+                    {item.content ? <MarkdownContent content={item.content} /> : null}
+                  </div>
+                </article>
+              );
+            })
           )}
         </div>
 
