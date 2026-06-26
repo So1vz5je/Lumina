@@ -31,6 +31,8 @@ interface ChatStreamSegment {
   result?: string;
   status?: ChatToolSegmentStatus;
   open?: boolean;
+  startedAt?: number;
+  completedAt?: number;
 }
 
 interface ChatMessage {
@@ -161,7 +163,18 @@ const createStreamSegment = (
   toolName,
   content,
   open,
+  startedAt: Date.now(),
 });
+
+const completeOpenReasoningSegments = (
+  segments: ChatStreamSegment[],
+  completedAt = Date.now(),
+): ChatStreamSegment[] =>
+  segments.map((segment) => (
+    segment.type === 'reasoning' && !segment.completedAt
+      ? { ...segment, completedAt }
+      : segment
+  ));
 
 const migrateMessageSegments = (message: ChatMessage): ChatMessage => {
   if (message.segments?.length) return message;
@@ -169,7 +182,11 @@ const migrateMessageSegments = (message: ChatMessage): ChatMessage => {
 
   const segments: ChatStreamSegment[] = [];
   if (message.reasoning) {
-    segments.push(createStreamSegment('reasoning', message.reasoning, undefined, message.reasoningOpen, segments.length));
+    segments.push({
+      ...createStreamSegment('reasoning', message.reasoning, undefined, message.reasoningOpen, segments.length),
+      startedAt: message.startedAt,
+      completedAt: message.thinkingCompletedAt || message.completedAt,
+    });
   }
   message.toolEvents?.forEach((event) => {
     if (event.type === 'tool_call') {
@@ -206,7 +223,9 @@ const appendStreamSegment = (
   content: string,
   toolName?: string,
 ): ChatMessage => {
-  const segments = [...(message.segments || [])];
+  const segments = type === 'reasoning'
+    ? [...(message.segments || [])]
+    : completeOpenReasoningSegments([...(message.segments || [])]);
   const last = segments[segments.length - 1];
   if ((type === 'reasoning' || type === 'content') && last?.type === type) {
     segments[segments.length - 1] = { ...last, content: `${last.content}${content}` };
@@ -217,7 +236,7 @@ const appendStreamSegment = (
 };
 
 const appendToolCallSegment = (message: ChatMessage, toolName: string | undefined, content: string): ChatMessage => {
-  const segments = [...(message.segments || [])];
+  const segments = completeOpenReasoningSegments([...(message.segments || [])]);
   segments.push({
     ...createStreamSegment('tool', content, toolName, false, segments.length),
     status: 'running',
@@ -226,7 +245,7 @@ const appendToolCallSegment = (message: ChatMessage, toolName: string | undefine
 };
 
 const completeToolSegment = (message: ChatMessage, toolName: string | undefined, result: string): ChatMessage => {
-  const segments = [...(message.segments || [])];
+  const segments = completeOpenReasoningSegments([...(message.segments || [])]);
   const pendingIndex = [...segments]
     .reverse()
     .findIndex((segment) => segment.type === 'tool' && segment.toolName === toolName && segment.status !== 'done');
@@ -276,6 +295,7 @@ const markAssistantMessageCancelled = (messageItem: ChatMessage): ChatMessage =>
     phase: 'cancelled',
     completedAt: Date.now(),
     startedAt: messageItem.startedAt || Date.now(),
+    segments: completeOpenReasoningSegments(messageItem.segments || []),
     thinkingCompletedAt:
       messageItem.reasoning && !messageItem.thinkingCompletedAt
         ? Date.now()
@@ -733,6 +753,7 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
                 phase: payload.eventType === 'error' ? 'error' : 'done',
                 completedAt: Date.now(),
                 startedAt: messageItem.startedAt || Date.now(),
+                segments: completeOpenReasoningSegments(messageItem.segments || []),
                 thinkingCompletedAt:
                   messageItem.reasoning && !messageItem.thinkingCompletedAt
                     ? Date.now()
@@ -914,11 +935,6 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
                 || item.phase === 'done'
                 || item.phase === 'error'
                 || item.phase === 'cancelled';
-              const reasoningEnd = item.thinkingCompletedAt || item.completedAt || clockTick;
-              const reasoningElapsed = formatElapsedSeconds(item.startedAt, reasoningEnd);
-              const reasoningLabel = reasoningDone
-                ? `已思考（用时 ${reasoningElapsed}）`
-                : `思考中（${reasoningElapsed}）`;
               const reasoningOpen = item.reasoningOpen !== false;
               const streamSegments = isAssistant ? getMessageSegments(item) : [];
 
@@ -952,6 +968,13 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
                         .slice(segmentIndex + 1)
                         .some((nextSegment) => nextSegment.type !== 'reasoning');
                       const segmentDone = reasoningDone || hasLaterVisibleSegment;
+                      const segmentEnd = segment.completedAt
+                        || (segmentDone ? item.thinkingCompletedAt || item.completedAt : undefined)
+                        || clockTick;
+                      const segmentElapsed = formatElapsedSeconds(segment.startedAt || item.startedAt, segmentEnd);
+                      const segmentReasoningLabel = segmentDone
+                        ? `已思考（用时 ${segmentElapsed}）`
+                        : `思考中（${segmentElapsed}）`;
                       const segmentOpen = segment.open ?? reasoningOpen;
 
                       return (
@@ -969,7 +992,7 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
                         >
                           <summary>
                             <span className="ai-reasoning-mark" aria-hidden="true" />
-                            <span className="ai-reasoning-label">{reasoningLabel}</span>
+                            <span className="ai-reasoning-label">{segmentReasoningLabel}</span>
                             <span className="ai-reasoning-caret" aria-hidden="true" />
                           </summary>
                           <MarkdownContent content={segment.content} />

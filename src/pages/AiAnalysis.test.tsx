@@ -419,4 +419,57 @@ describe('AiAnalysis workspace', () => {
     ]);
     expect(streamParts[1]).toHaveTextContent('exitCode=0');
   });
+
+  it('times each streamed reasoning segment from its own start', async () => {
+    const { container } = render(<AiAnalysis {...props} />);
+
+    await screen.findByLabelText('AI conversation');
+    vi.mocked(Date.now).mockReturnValue(1_700_000_000_000);
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'reasoning',
+          content: 'first reasoning',
+        },
+      });
+    });
+    vi.mocked(Date.now).mockReturnValue(1_700_000_002_000);
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'tool_call',
+          toolName: 'run_command',
+          content: '{"command":"whoami"}',
+        },
+      });
+    });
+    vi.mocked(Date.now).mockReturnValue(1_700_000_006_000);
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'reasoning',
+          content: 'second reasoning',
+        },
+      });
+    });
+    vi.mocked(Date.now).mockReturnValue(1_700_000_008_000);
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'token',
+          content: 'answer',
+        },
+      });
+    });
+
+    const labels = Array.from(container.querySelectorAll('.ai-reasoning-label'))
+      .map((node) => node.textContent || '');
+    expect(labels).toHaveLength(2);
+    expect(labels[0]).toContain('2 秒');
+    expect(labels[1]).toContain('2 秒');
+  });
 });
