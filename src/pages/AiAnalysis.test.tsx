@@ -337,6 +337,7 @@ describe('AiAnalysis workspace', () => {
     });
 
     expect(screen.getByText('批准管理员命令')).toBeInTheDocument();
+    expect(screen.getByText(/Windows UAC/)).toBeInTheDocument();
     expect(screen.getByText('net session')).toBeInTheDocument();
     expect(screen.getByText('C:\\IR\\host-a')).toBeInTheDocument();
 
@@ -470,6 +471,64 @@ describe('AiAnalysis workspace', () => {
       .map((node) => node.textContent || '');
     expect(labels).toHaveLength(2);
     expect(labels[0]).toContain('2 秒');
+    expect(labels[1]).toContain('2 秒');
+  });
+
+  it('does not mark a later reasoning segment done from an earlier answer token', async () => {
+    const { container } = render(<AiAnalysis {...props} />);
+
+    await screen.findByLabelText('AI conversation');
+    vi.mocked(Date.now).mockReturnValue(1_700_000_000_000);
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'reasoning',
+          content: 'first reasoning',
+        },
+      });
+    });
+    vi.mocked(Date.now).mockReturnValue(1_700_000_002_000);
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'token',
+          content: 'first answer',
+        },
+      });
+    });
+    vi.mocked(Date.now).mockReturnValue(1_700_000_006_000);
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'reasoning',
+          content: 'second reasoning',
+        },
+      });
+    });
+
+    let reasoningBlocks = Array.from(container.querySelectorAll('.ai-reasoning'));
+    expect(reasoningBlocks).toHaveLength(2);
+    expect(reasoningBlocks[0]).toHaveClass('done');
+    expect(reasoningBlocks[1]).toHaveClass('running');
+
+    vi.mocked(Date.now).mockReturnValue(1_700_000_008_000);
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'token',
+          content: 'second answer',
+        },
+      });
+    });
+
+    reasoningBlocks = Array.from(container.querySelectorAll('.ai-reasoning'));
+    const labels = Array.from(container.querySelectorAll('.ai-reasoning-label'))
+      .map((node) => node.textContent || '');
+    expect(reasoningBlocks[1]).toHaveClass('done');
     expect(labels[1]).toContain('2 秒');
   });
 });

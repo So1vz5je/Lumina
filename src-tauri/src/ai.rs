@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex};
@@ -21,6 +21,8 @@ static AI_CANCELLED_SESSIONS: Lazy<Mutex<BTreeSet<String>>> =
     Lazy::new(|| Mutex::new(BTreeSet::new()));
 static AI_ADMIN_APPROVALS: Lazy<Mutex<BTreeMap<String, AdminApprovalHandle>>> =
     Lazy::new(|| Mutex::new(BTreeMap::new()));
+static AI_ADMIN_APPROVED_SESSIONS: Lazy<Mutex<BTreeSet<String>>> =
+    Lazy::new(|| Mutex::new(BTreeSet::new()));
 
 struct AdminApprovalHandle {
     session_id: String,
@@ -180,6 +182,37 @@ fn is_ai_session_cancelled(session_id: &str) -> bool {
         return false;
     }
     AI_CANCELLED_SESSIONS
+        .lock()
+        .map(|sessions| sessions.contains(trimmed))
+        .unwrap_or(false)
+}
+
+fn mark_admin_approved_for_session(session_id: &str) {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if let Ok(mut sessions) = AI_ADMIN_APPROVED_SESSIONS.lock() {
+        sessions.insert(trimmed.to_string());
+    }
+}
+
+fn clear_admin_approved_for_session(session_id: &str) {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if let Ok(mut sessions) = AI_ADMIN_APPROVED_SESSIONS.lock() {
+        sessions.remove(trimmed);
+    }
+}
+
+fn is_admin_approved_for_session(session_id: &str) -> bool {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    AI_ADMIN_APPROVED_SESSIONS
         .lock()
         .map(|sessions| sessions.contains(trimmed))
         .unwrap_or(false)
@@ -362,6 +395,7 @@ pub fn ai_send_message(app: AppHandle, request: AiSendMessageRequest) -> Result<
             }
         }
         reject_pending_admin_approvals_for_session(&session_id);
+        clear_admin_approved_for_session(&session_id);
         clear_ai_session_cancelled(&session_id);
     });
 
@@ -376,6 +410,7 @@ pub fn ai_cancel_message(app: AppHandle, session_id: String) -> Result<(), Strin
     }
     mark_ai_session_cancelled(trimmed);
     reject_pending_admin_approvals_for_session(trimmed);
+    clear_admin_approved_for_session(trimmed);
     emit_ai_event(&app, trimmed, "cancelled", "", None)
 }
 
@@ -397,7 +432,11 @@ pub fn ai_resolve_admin_approval(
     handle
         .sender
         .send(approved)
-        .map_err(|err| format!("Failed to resolve admin approval: {}", err))
+        .map_err(|err| format!("Failed to resolve admin approval: {}", err))?;
+    if approved {
+        mark_admin_approved_for_session(&handle.session_id);
+    }
+    Ok(())
 }
 
 fn run_ai_session(
@@ -1228,6 +1267,21 @@ fn wait_for_admin_approval(
     approval_id: &str,
     payload: Value,
 ) -> Result<bool, String> {
+    ensure_ai_session_active(&request.session_id)?;
+    if is_admin_approved_for_session(&request.session_id) {
+        let _ = log_ai_audit_event(
+            workspace,
+            &request.session_id,
+            "admin_approval_decision",
+            json!({
+                "approvalId": approval_id,
+                "approved": true,
+                "reused": true,
+            }),
+        );
+        return Ok(true);
+    }
+
     let (sender, receiver) = mpsc::channel();
     {
         let mut approvals = AI_ADMIN_APPROVALS
@@ -1378,6 +1432,124 @@ fn sanitize_admin_run_name(value: &str) -> String {
         .collect()
 }
 
+fn read_admin_output_file(
+    path: &Path,
+    file_name: &str,
+    missing_files: &mut Vec<String>,
+    diagnostics: &mut Vec<String>,
+) -> String {
+    match fs::read(path) {
+        Ok(bytes) => decode_tool_output(&bytes),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            missing_files.push(file_name.to_string());
+            String::new()
+        }
+        Err(err) => {
+            diagnostics.push(format!(
+                "Failed to read admin result file {}: {}",
+                file_name, err
+            ));
+            String::new()
+        }
+    }
+}
+
+fn read_admin_exit_code(
+    path: &Path,
+    missing_files: &mut Vec<String>,
+    diagnostics: &mut Vec<String>,
+) -> i32 {
+    match fs::read_to_string(path) {
+        Ok(value) => match value.trim().parse::<i32>() {
+            Ok(code) => code,
+            Err(err) => {
+                diagnostics.push(format!(
+                    "Admin command exit file did not contain a valid exit code: {}",
+                    err
+                ));
+                -1
+            }
+        },
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            missing_files.push("exit.txt".to_string());
+            diagnostics.push(
+                "Admin command did not write result files. UAC may have been cancelled, the elevated process may not have started, or output capture failed."
+                    .to_string(),
+            );
+            -1
+        }
+        Err(err) => {
+            diagnostics.push(format!(
+                "Failed to read admin result file exit.txt: {}",
+                err
+            ));
+            -1
+        }
+    }
+}
+
+fn format_admin_command_result(
+    command_line: &str,
+    working_directory: &str,
+    timeout_seconds: u64,
+    run_dir: &Path,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    exit_path: &Path,
+    launcher_stdout: &str,
+    launcher_stderr: &str,
+    launcher_exit_code: i32,
+) -> String {
+    let mut missing_files = Vec::new();
+    let mut diagnostics = Vec::new();
+    let stdout = read_admin_output_file(
+        stdout_path,
+        "stdout.txt",
+        &mut missing_files,
+        &mut diagnostics,
+    );
+    let stderr = read_admin_output_file(
+        stderr_path,
+        "stderr.txt",
+        &mut missing_files,
+        &mut diagnostics,
+    );
+    let exit_code = read_admin_exit_code(exit_path, &mut missing_files, &mut diagnostics);
+
+    if !missing_files.is_empty() {
+        diagnostics.push(format!(
+            "Missing admin result files: {}",
+            missing_files.join(", ")
+        ));
+    }
+    if !launcher_stdout.trim().is_empty() {
+        diagnostics.push(format!("launcher stdout:\n{}", launcher_stdout.trim_end()));
+    }
+    if !launcher_stderr.trim().is_empty() {
+        diagnostics.push(format!("launcher stderr:\n{}", launcher_stderr.trim_end()));
+    }
+
+    let combined_stderr = if stderr.trim().is_empty() {
+        diagnostics.join("\n")
+    } else if diagnostics.is_empty() {
+        stderr
+    } else {
+        format!("{}\n{}", stderr.trim_end(), diagnostics.join("\n"))
+    };
+
+    format!(
+        "command={}\nworkingDirectory={}\ntimeoutSeconds={}\nrunAsAdmin=true\napproved=true\ntimedOut=false\nexitCode={}\nadminRunDirectory={}\nlauncherExitCode={}\nstdout:\n{}\nstderr:\n{}",
+        command_line,
+        working_directory,
+        timeout_seconds,
+        exit_code,
+        run_dir.to_string_lossy(),
+        launcher_exit_code,
+        stdout,
+        combined_stderr
+    )
+}
+
 #[cfg(target_os = "windows")]
 fn execute_approved_admin_command(
     command_line: &str,
@@ -1490,35 +1662,18 @@ fn execute_approved_admin_command(
         );
     }
 
-    let stdout = fs::read(&stdout_path)
-        .map(|bytes| decode_tool_output(&bytes))
-        .unwrap_or_default();
-    let stderr = fs::read(&stderr_path)
-        .map(|bytes| decode_tool_output(&bytes))
-        .unwrap_or_default();
-    let exit_code = fs::read_to_string(&exit_path)
-        .ok()
-        .and_then(|value| value.trim().parse::<i32>().ok())
-        .unwrap_or_else(|| parent_output.status.code().unwrap_or(-1));
-    let launcher_stderr = decode_tool_output(&parent_output.stderr);
-    let combined_stderr = if stderr.trim().is_empty() {
-        launcher_stderr
-    } else if launcher_stderr.trim().is_empty() {
-        stderr
-    } else {
-        format!("{}\nlauncher stderr:\n{}", stderr, launcher_stderr)
-    };
-
     truncate_tool_output(
-        format!(
-            "command={}\nworkingDirectory={}\ntimeoutSeconds={}\nrunAsAdmin=true\napproved=true\ntimedOut=false\nexitCode={}\nadminRunDirectory={}\nstdout:\n{}\nstderr:\n{}",
+        format_admin_command_result(
             command_line,
             working_directory,
             timeout_seconds,
-            exit_code,
-            run_dir.to_string_lossy(),
-            stdout,
-            combined_stderr
+            &run_dir,
+            &stdout_path,
+            &stderr_path,
+            &exit_path,
+            &decode_tool_output(&parent_output.stdout),
+            &decode_tool_output(&parent_output.stderr),
+            parent_output.status.code().unwrap_or(-1),
         ),
         24_000,
     )
@@ -2074,6 +2229,61 @@ mod tests {
         assert_eq!(payload["workingDirectory"], "C:\\IR");
         assert_eq!(payload["reason"], "检查管理员会话");
         assert_eq!(payload["timeoutSeconds"], 15);
+    }
+
+    #[test]
+    fn admin_command_result_missing_files_reports_capture_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "lumina-admin-result-missing-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).expect("remove stale admin result test dir");
+        }
+        std::fs::create_dir_all(&root).expect("create admin result test dir");
+
+        let output = format_admin_command_result(
+            "wevtutil qe Security",
+            "C:\\IR",
+            30,
+            &root,
+            &root.join("stdout.txt"),
+            &root.join("stderr.txt"),
+            &root.join("exit.txt"),
+            "",
+            "",
+            0,
+        );
+
+        assert!(output.contains("runAsAdmin=true"), "{output}");
+        assert!(output.contains("approved=true"), "{output}");
+        assert!(output.contains("timedOut=false"), "{output}");
+        assert!(output.contains("exitCode=-1"), "{output}");
+        assert!(
+            output.contains("Admin command did not write result files"),
+            "{output}"
+        );
+        assert!(
+            output.contains("Missing admin result files: stdout.txt, stderr.txt, exit.txt"),
+            "{output}"
+        );
+        assert!(output.contains("launcherExitCode=0"), "{output}");
+
+        std::fs::remove_dir_all(&root).expect("cleanup admin result test dir");
+    }
+
+    #[test]
+    fn admin_session_approval_is_reused_until_cleared() {
+        let session_id = format!("approval-reuse-{}", std::process::id());
+
+        clear_admin_approved_for_session(&session_id);
+        assert!(!is_admin_approved_for_session(&session_id));
+
+        mark_admin_approved_for_session(&session_id);
+        assert!(is_admin_approved_for_session(&session_id));
+
+        clear_admin_approved_for_session(&session_id);
+        assert!(!is_admin_approved_for_session(&session_id));
     }
 
     #[test]

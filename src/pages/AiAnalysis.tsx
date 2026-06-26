@@ -929,10 +929,8 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
                 && !item.content
                 && !item.toolEvents?.length
                 && !item.segments?.length;
-              const reasoningDone =
-                Boolean(item.thinkingCompletedAt)
-                || item.phase === 'answering'
-                || item.phase === 'done'
+              const messageFinished =
+                item.phase === 'done'
                 || item.phase === 'error'
                 || item.phase === 'cancelled';
               const reasoningOpen = item.reasoningOpen !== false;
@@ -967,9 +965,9 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
                       const hasLaterVisibleSegment = streamSegments
                         .slice(segmentIndex + 1)
                         .some((nextSegment) => nextSegment.type !== 'reasoning');
-                      const segmentDone = reasoningDone || hasLaterVisibleSegment;
+                      const segmentDone = Boolean(segment.completedAt) || hasLaterVisibleSegment || messageFinished;
                       const segmentEnd = segment.completedAt
-                        || (segmentDone ? item.thinkingCompletedAt || item.completedAt : undefined)
+                        || (messageFinished ? item.completedAt || item.thinkingCompletedAt : undefined)
                         || clockTick;
                       const segmentElapsed = formatElapsedSeconds(segment.startedAt || item.startedAt, segmentEnd);
                       const segmentReasoningLabel = segmentDone
@@ -1049,6 +1047,9 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
         >
           {pendingAdminApproval ? (
             <div className="ai-admin-approval">
+              <p className="ai-admin-approval-note">
+                批准后仍会弹出 Windows UAC 系统确认；本轮对话后续管理员命令会复用应用内批准。
+              </p>
               <div>
                 <span>原因</span>
                 <strong>{pendingAdminApproval.reason}</strong>

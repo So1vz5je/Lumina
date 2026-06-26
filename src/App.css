@@ -8020,6 +8020,17 @@ body {
   gap: 10px;
 }
 
+.ai-admin-approval-note {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid #d7dce3;
+  border-radius: 6px;
+  background: #f6f7f9;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .ai-admin-approval > div {
   display: grid;
   gap: 5px;
@@ -8053,6 +8064,13 @@ body {
 .dark .ai-admin-approval span,
 .analysis-workbench.dark .ai-admin-approval span {
   color: #8f98a7;
+}
+
+.dark .ai-admin-approval-note,
+.analysis-workbench.dark .ai-admin-approval-note {
+  border-color: #3a3f48;
+  background: #191b20;
+  color: #a9b0bd;
 }
 
 .dark .ai-admin-approval strong,
