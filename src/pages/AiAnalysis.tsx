@@ -37,7 +37,56 @@ interface AiAnalysisProps {
   scanResults: AnalysisResult[];
 }
 
+interface AiConversationSnapshot {
+  sessionId: string;
+  messages: ChatMessage[];
+  input: string;
+}
+
 const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+const aiConversationStorageKey = 'emergency-analyzer.ai-analysis.conversation.v1';
+
+const normalizeRestoredMessages = (messages: ChatMessage[]): ChatMessage[] =>
+  messages.map((item) => {
+    if (item.role !== 'assistant') return item;
+    if (item.phase !== 'pending' && item.phase !== 'reasoning' && item.phase !== 'answering') return item;
+    if (item.content || item.reasoning) {
+      return { ...item, phase: 'done', completedAt: item.completedAt || Date.now() };
+    }
+    return {
+      ...item,
+      phase: 'error',
+      content: '上次分析未完成，请重新发送。',
+      completedAt: item.completedAt || Date.now(),
+    };
+  });
+
+const loadAiConversationSnapshot = (): AiConversationSnapshot | undefined => {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const raw = window.sessionStorage.getItem(aiConversationStorageKey);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as Partial<AiConversationSnapshot>;
+    if (!parsed.sessionId || !Array.isArray(parsed.messages)) return undefined;
+    return {
+      sessionId: parsed.sessionId,
+      messages: normalizeRestoredMessages(parsed.messages),
+      input: typeof parsed.input === 'string' ? parsed.input : '',
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const saveAiConversationSnapshot = (snapshot: AiConversationSnapshot) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(aiConversationStorageKey, JSON.stringify(snapshot));
+  } catch {
+    // Session storage is best-effort; the in-memory React state remains authoritative.
+  }
+};
 
 const createAssistantMessage = (phase: ChatPhase = 'pending'): ChatMessage => ({
   id: `${makeId()}-assistant`,
@@ -243,9 +292,12 @@ function ThinkingDots() {
 }
 
 export default function AiAnalysis({ mode, osType, currentModule, scanResults }: AiAnalysisProps) {
-  const [sessionId] = useState(() => makeId());
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
+  const [initialSnapshot] = useState<AiConversationSnapshot>(
+    () => loadAiConversationSnapshot() || { sessionId: makeId(), messages: [], input: '' },
+  );
+  const [sessionId] = useState(() => initialSnapshot.sessionId);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => initialSnapshot.messages);
+  const [input, setInput] = useState(() => initialSnapshot.input);
   const [running, setRunning] = useState(false);
   const [clockTick, setClockTick] = useState(() => Date.now());
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -266,6 +318,10 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
     const timer = window.setInterval(() => setClockTick(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [running]);
+
+  useEffect(() => {
+    saveAiConversationSnapshot({ sessionId, messages, input });
+  }, [input, messages, sessionId]);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;

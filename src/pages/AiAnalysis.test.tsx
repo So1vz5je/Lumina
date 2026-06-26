@@ -36,6 +36,7 @@ describe('AiAnalysis workspace', () => {
     });
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockResolvedValue(undefined);
+    window.sessionStorage.clear();
     vi.spyOn(Date, 'now').mockReturnValue(1700000000000);
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     globalThis.ResizeObserver = class ResizeObserver {
@@ -149,5 +150,48 @@ describe('AiAnalysis workspace', () => {
     expect(container.querySelector('.ai-reasoning')).toHaveClass('done');
     expect(container.querySelector('.ai-reasoning-label')).toHaveTextContent('已思考');
     expect(screen.getByText('我是 DeepSeek。')).toBeInTheDocument();
+  });
+
+  it('keeps the current conversation after the workspace unmounts and remounts', async () => {
+    const props = {
+      mode: '本地分析',
+      osType: 'windows',
+      currentModule: '安全日志',
+      scanResults,
+    };
+    const first = render(<AiAnalysis {...props} />);
+
+    await screen.findByText('AI 分析');
+    const input = first.container.querySelector('textarea');
+    const sendButton = first.container.querySelector('.ai-send-button');
+    await act(async () => {
+      fireEvent.change(input as HTMLTextAreaElement, { target: { value: '保留这次对话' } });
+      fireEvent.click(sendButton as HTMLButtonElement);
+    });
+    await act(async () => {
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'token',
+          content: '这条回答应该保留。',
+        },
+      });
+      eventMock.streamHandler?.({
+        payload: {
+          sessionId: '1700000000000-8',
+          eventType: 'done',
+          content: '',
+        },
+      });
+    });
+
+    expect(screen.getByText('保留这次对话')).toBeInTheDocument();
+    expect(screen.getByText('这条回答应该保留。')).toBeInTheDocument();
+
+    first.unmount();
+    render(<AiAnalysis {...props} />);
+
+    expect(await screen.findByText('保留这次对话')).toBeInTheDocument();
+    expect(screen.getByText('这条回答应该保留。')).toBeInTheDocument();
   });
 });
