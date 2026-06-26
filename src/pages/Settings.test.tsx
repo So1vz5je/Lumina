@@ -101,6 +101,10 @@ describe('Settings authorization UI', () => {
     expect(screen.getByText('导出路径')).toBeInTheDocument();
     expect(screen.getByText('AI 配置')).toBeInTheDocument();
     expect(screen.getByText('应用信息')).toBeInTheDocument();
+    expect(screen.queryByText('模型连接')).not.toBeInTheDocument();
+    expect(screen.queryByText('显示思考过程')).not.toBeInTheDocument();
+    expect(screen.queryByText('启用工具调用')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /粘贴/ })).not.toBeInTheDocument();
     expect(screen.queryByText('柔和')).not.toBeInTheDocument();
     expect(screen.queryByText('透明效果')).not.toBeInTheDocument();
     expect(screen.queryByText('背景文件')).not.toBeInTheDocument();
