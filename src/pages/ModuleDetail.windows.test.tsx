@@ -258,6 +258,25 @@ describe('Windows local analysis commands', () => {
     expect(databaseCommand).toContain('Redis');
   });
 
+  it('uses Everything index matches as the primary Windows panel detector', () => {
+    const command = getWindowsLocalCommand('panel');
+
+    expect(command).toContain('ES_MATCHES');
+    expect(command).toContain('es.exe');
+    expect(command).toContain('phpstudy_pro');
+    expect(command).toContain('BtSoft');
+    expect(command).toContain('IIS_SITES');
+    expect(command).not.toContain('===PHPSTUDY===');
+  });
+
+  it('serializes Windows panel PowerShell object lists before emitting JSON sections', () => {
+    const command = getWindowsLocalCommand('panel');
+
+    expect(command).toContain('Convert-ToJsonArray -items $esMatches.ToArray() -depth 6');
+    expect(command).toContain('Convert-ToJsonArray -items $panelRows.ToArray() -depth 6');
+    expect(command).not.toContain('Convert-ToJsonArray $esMatches 6');
+  });
+
   it('shows a clean browser-preview diagnostic instead of invoking local commands', async () => {
     renderWindowsModule('env_vars');
 

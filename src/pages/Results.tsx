@@ -9,7 +9,9 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import type { AnalysisResult } from '../types/analysis';
+import type { RiskFinding } from '../types/analysis';
 import { getScanModuleLabel, getScanStatusMeta, scanModuleCatalog } from '../modules/scan/catalog';
+import { buildRiskFindings, mergeRiskFindings, type RiskSeverity } from '../modules/scan/riskEngine';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -17,6 +19,8 @@ const RESULT_PREVIEW_LIMIT = 50;
 
 interface ResultsProps {
   results?: AnalysisResult[];
+  riskFindings?: RiskFinding[];
+  diagnostics?: string[];
 }
 
 type DetailRecord = Record<string, unknown>;
@@ -39,6 +43,13 @@ interface FindingSection {
   title: string;
   rows: FindingRow[];
 }
+
+const riskSeverityMeta: Record<RiskSeverity, { label: string; tone: string; color: string }> = {
+  critical: { label: 'Critical', tone: 'critical', color: 'error' },
+  high: { label: 'High', tone: 'high', color: 'warning' },
+  medium: { label: 'Medium', tone: 'medium', color: 'processing' },
+  low: { label: 'Low', tone: 'low', color: 'default' },
+};
 
 function isRecord(value: unknown): value is DetailRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -325,6 +336,9 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
     const fallbackInstalls = getArray(details, 'installs').filter((item) => readBool(item, 'detected'));
     const panels = previewRows(detectedInstalls.length > 0 ? detectedInstalls : fallbackInstalls);
     const sites = previewRows(getArray(details, 'iis_sites'));
+    const services = previewRows(getArray(details, 'services'));
+    const logs = previewRows(getArray(details, 'logs'));
+    const diagnostics = previewRows(getTextArray(details, 'diagnostics'));
     const sections: FindingSection[] = [];
 
     if (panels.length > 0) {
@@ -355,6 +369,51 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
             { label: '状态', value: readField(site, ['state', 'State']) },
             { label: '绑定', value: readField(site, ['bindings', 'Bindings']) },
           ],
+        })),
+      });
+    }
+
+    if (services.length > 0) {
+      sections.push({
+        title: '相关服务',
+        rows: services.map((service, index) => ({
+          key: `panel-service-${index}`,
+          title: readField(service, ['name', 'Name']),
+          subtitle: readField(service, ['path', 'PathName', 'path_name']),
+          fields: [
+            { label: '来源', value: readField(service, ['source', 'Source']) },
+            { label: '显示名', value: readField(service, ['display_name', 'DisplayName']) },
+            { label: '状态', value: readField(service, ['state', 'State']) },
+            { label: '启动', value: readField(service, ['start_mode', 'StartMode', 'StartType']) },
+            { label: 'PID', value: readField(service, ['pid', 'ProcessId']) },
+          ],
+        })),
+      });
+    }
+
+    if (logs.length > 0) {
+      sections.push({
+        title: '日志/配置文件',
+        rows: logs.map((log, index) => ({
+          key: `panel-log-${index}`,
+          title: readField(log, ['path', 'Path']),
+          subtitle: readField(log, ['note', 'Note']),
+          fields: [
+            { label: '来源', value: readField(log, ['source', 'Source']) },
+            { label: '大小', value: formatByteCount(log.size ?? log.Length ?? log.length ?? log.Size) },
+            { label: '修改时间', value: readField(log, ['last_modified', 'LastWriteTime', 'LastModified']) },
+          ],
+        })),
+      });
+    }
+
+    if (diagnostics.length > 0) {
+      sections.push({
+        title: '采集诊断',
+        rows: diagnostics.map((diagnostic, index) => ({
+          key: `panel-diagnostic-${index}`,
+          title: diagnostic,
+          fields: [{ label: '来源', value: 'panel analyzer' }],
         })),
       });
     }
@@ -637,7 +696,48 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   return [];
 }
 
-export default function Results({ results = [] }: ResultsProps) {
+function renderRiskFinding(finding: RiskFinding) {
+  const meta = riskSeverityMeta[finding.severity];
+  const firstAction = finding.recommendedActions[0];
+
+  return (
+    <article className={`scan-risk-card ${meta.tone}`} key={finding.id}>
+      <div className="scan-risk-card-head">
+        <div>
+          <Text className="scan-risk-card-kicker">置信度 {finding.confidence}%</Text>
+          <Text strong className="scan-risk-card-title">{finding.title}</Text>
+        </div>
+        <Tag color={meta.color}>{meta.label}</Tag>
+      </div>
+      <Paragraph className="scan-risk-reason">判定：{finding.reason}</Paragraph>
+      {finding.affected.length > 0 ? (
+        <div className="scan-risk-field-row">
+          <Text type="secondary">影响对象</Text>
+          <div>
+            {finding.affected.slice(0, 4).map((item) => (
+              <Tag key={`${finding.id}-affected-${item}`}>对象: {item}</Tag>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {finding.evidence.length > 0 ? (
+        <div className="scan-risk-field-row">
+          <Text type="secondary">证据</Text>
+          <div>
+            {finding.evidence.slice(0, 4).map((evidence, index) => (
+              <Tag key={`${finding.id}-evidence-${index}`}>
+                {evidence.moduleName} | {evidence.label}: {evidence.value}
+              </Tag>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {firstAction ? <Text className="scan-risk-action">{firstAction}</Text> : null}
+    </article>
+  );
+}
+
+export default function Results({ results = [], riskFindings: providedRiskFindings = [] }: ResultsProps) {
   const [selectedModule, setSelectedModule] = useState<string | null>(null);
 
   useEffect(() => {
@@ -658,6 +758,14 @@ export default function Results({ results = [] }: ResultsProps) {
     (count, section) => count + section.rows.length,
     0,
   );
+  const computedRiskFindings = useMemo(() => buildRiskFindings(results), [results]);
+  const riskFindings = useMemo(
+    () => mergeRiskFindings([providedRiskFindings, computedRiskFindings]),
+    [computedRiskFindings, providedRiskFindings],
+  );
+  const highRiskCount = riskFindings.filter((finding) =>
+    finding.severity === 'critical' || finding.severity === 'high'
+  ).length;
 
   const statusStats = useMemo(
     () =>
@@ -752,6 +860,35 @@ export default function Results({ results = [] }: ResultsProps) {
           导出 JSON
         </Button>
       </div>
+
+      <section className={`scan-risk-panel ${highRiskCount > 0 ? 'attention' : 'steady'}`}>
+        <div className="scan-risk-panel-head">
+          <div>
+            <Text className="scan-eyebrow">高危发现</Text>
+            <Title level={4}>扫描风险归因</Title>
+          </div>
+          <div className="scan-risk-panel-stats">
+            <span>
+              <Text>高危</Text>
+              <strong>{highRiskCount}</strong>
+            </span>
+            <span>
+              <Text>全部发现</Text>
+              <strong>{riskFindings.length}</strong>
+            </span>
+          </div>
+        </div>
+
+        {riskFindings.length > 0 ? (
+          <div className="scan-risk-grid">
+            {riskFindings.slice(0, 6).map(renderRiskFinding)}
+          </div>
+        ) : (
+          <div className="scan-risk-empty">
+            暂无自动归因的高危发现，建议继续复核模块详情和原始证据。
+          </div>
+        )}
+      </section>
 
       <div className="scan-results-soc-shell scan-results-detail-grid">
         <div className="scan-module-strip" role="tablist" aria-label="扫描模块">

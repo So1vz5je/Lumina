@@ -113,4 +113,110 @@ describe('Windows panel detection model', () => {
     });
     expect(data.statistics.detectedPanelCount).toBe(1);
   });
+
+  it('derives panel installs, sites, and logs from Everything index matches', () => {
+    const data = parseWindowsPanelSections([
+      '===PANELS===',
+      '[]',
+      '===ES_MATCHES===',
+      JSON.stringify([
+        {
+          Source: 'everything',
+          Query: 'phpstudy_pro',
+          FullPath: 'D:\\webstack\\phpstudy_pro\\WWW\\demo.local\\index.php',
+          Name: 'index.php',
+          ParentPath: 'D:\\webstack\\phpstudy_pro\\WWW\\demo.local',
+          Extension: 'php',
+          Length: 512,
+          LastWriteTime: '2026-06-25T20:00:00',
+        },
+        {
+          Source: 'everything',
+          Query: 'xampp',
+          FullPath: 'E:\\portable\\xampp\\apache\\logs\\access.log',
+          Name: 'access.log',
+          ParentPath: 'E:\\portable\\xampp\\apache\\logs',
+          Extension: 'log',
+          Length: 4096,
+          LastWriteTime: '2026-06-25T21:00:00',
+        },
+      ]),
+    ].join('\n'));
+
+    expect(data.installs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          panelType: 'phpstudy',
+          path: 'D:\\webstack\\phpstudy_pro',
+          siteRoot: 'D:\\webstack\\phpstudy_pro\\WWW',
+          detected: true,
+          evidence: 'everything_index',
+        }),
+      ]),
+    );
+    expect(data.sites[0]).toMatchObject({
+      panelType: 'phpstudy',
+      name: 'demo.local',
+      path: 'D:\\webstack\\phpstudy_pro\\WWW\\demo.local',
+    });
+    expect(data.logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'xampp',
+          path: 'E:\\portable\\xampp\\apache\\logs\\access.log',
+          sizeText: '4 KB',
+        }),
+      ]),
+    );
+  });
+
+  it('detects a phpStudy install from Everything matches under the COM directory', () => {
+    const data = parseWindowsPanelSections([
+      '===PANELS===',
+      '[]',
+      '===ES_MATCHES===',
+      JSON.stringify([
+        {
+          Source: 'everything',
+          Query: 'phpstudy_pro',
+          FullPath: 'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\phpstudy_pro\\phpstudy_pro.lnk',
+          Name: 'phpstudy_pro.lnk',
+          ParentPath: 'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\phpstudy_pro',
+          Extension: 'lnk',
+          Length: 705,
+          LastWriteTime: '2023-11-17T19:37:55',
+        },
+        {
+          Source: 'everything',
+          Query: 'phpstudy_pro',
+          FullPath: 'D:\\ctf-tools\\phpstudy_pro\\COM\\phpstudy_pro.exe',
+          Name: 'phpstudy_pro.exe',
+          ParentPath: 'D:\\ctf-tools\\phpstudy_pro\\COM',
+          Extension: 'exe',
+          Length: 2094592,
+          LastWriteTime: '2021-03-29T14:49:06',
+        },
+      ]),
+    ].join('\n'));
+
+    expect(data.detectedInstalls).toHaveLength(1);
+    expect(data.detectedInstalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          panelType: 'phpstudy',
+          path: 'D:\\ctf-tools\\phpstudy_pro',
+          detected: true,
+          evidence: 'everything_index',
+        }),
+      ]),
+    );
+    expect(data.detectedInstalls).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: 'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\phpstudy_pro',
+        }),
+      ]),
+    );
+    expect(data.statistics.detectedPanelCount).toBe(1);
+  });
 });

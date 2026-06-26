@@ -1281,6 +1281,379 @@ describe('ModuleDetail Windows security module rendering', () => {
     });
   });
 
+  it('searches indexed files with Everything live while typing', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: any) => {
+      if (command === 'everything_search_page') {
+        const request = args?.request;
+        expect(request).toMatchObject({
+          query: 'shell.php',
+          offset: 0,
+          path: undefined,
+          maxResults: 50,
+          filesOnly: true,
+          includeTotalCount: true,
+        });
+        expect(request).not.toHaveProperty('sort');
+        expect(request).not.toHaveProperty('sortDescending');
+        return {
+          results: [
+            {
+              fullPath: 'C:\\inetpub\\wwwroot\\shell.php',
+              name: 'shell.php',
+              parentPath: 'C:\\inetpub\\wwwroot',
+              extension: 'php',
+              size: 512,
+              dateModified: '2026-05-26T09:00:00',
+            },
+          ],
+          totalCount: 1,
+          offset: 0,
+          limit: 50,
+          hasMore: false,
+        };
+      }
+
+      if (command === 'execute_local_command') {
+        throw new Error('IOC file search should not run PowerShell recursion');
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="ioc_file_search"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+
+    expect(screen.queryByText('搜索结果')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /搜\s*索/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Everything 实时搜索'), {
+      target: { value: 'shell.php' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('shell.php')).toBeInTheDocument();
+      expect(screen.getByText('C:\\inetpub\\wwwroot\\shell.php')).toBeInTheDocument();
+      expect(screen.getByText('512 B')).toBeInTheDocument();
+      expect(screen.getByText('2026-05-26 09:00:00')).toBeInTheDocument();
+    });
+
+    expect(invokeMock).not.toHaveBeenCalledWith('execute_local_command', expect.anything());
+  });
+
+  it('previews Windows local Everything text results with PowerShell instead of Linux redirection', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: any) => {
+      if (command === 'everything_search_page') {
+        return {
+          results: [
+            {
+              fullPath: 'C:\\Users\\15823\\sdk\\go1.25.0\\src\\cmd\\go\\testdata\\script.go',
+              name: 'script.go',
+              parentPath: 'C:\\Users\\15823\\sdk\\go1.25.0\\src\\cmd\\go\\testdata',
+              extension: 'go',
+              size: 128,
+              dateModified: '2026-05-26T09:00:00',
+            },
+          ],
+          totalCount: 1,
+          offset: 0,
+          limit: 50,
+          hasMore: false,
+        };
+      }
+
+      if (command === 'execute_local_command') {
+        expect(args?.command).toContain('Get-Content');
+        expect(args?.command).toContain('-LiteralPath');
+        expect(args?.command).not.toContain('/dev/null');
+        return {
+          success: true,
+          stdout: 'package main',
+          stderr: '',
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="ioc_file_search"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Everything 实时搜索'), {
+      target: { value: 'script.go' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('script.go')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /script\.go/ }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('execute_local_command', expect.anything());
+      expect(screen.getByText('package main')).toBeInTheDocument();
+    });
+  });
+
+  it('does not run broad Everything searches for single-character input', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="ioc_file_search"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Everything 实时搜索'), {
+      target: { value: 'a' },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('builds Everything queries from advanced IOC file search filters', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: any) => {
+      if (command === 'everything_search_page') {
+        return {
+          results: [
+            {
+              fullPath: 'C:\\inetpub\\wwwroot\\shell.php',
+              name: 'shell.php',
+              parentPath: 'C:\\inetpub\\wwwroot',
+              extension: 'php',
+              size: 512,
+              dateModified: '2026-05-26T09:00:00',
+            },
+          ],
+          totalCount: 1,
+          offset: 0,
+          limit: 50,
+          hasMore: false,
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="ioc_file_search"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /高级/ }));
+    fireEvent.change(screen.getByLabelText('指定后缀'), {
+      target: { value: 'php, aspx' },
+    });
+    fireEvent.change(screen.getByLabelText('指定目录'), {
+      target: { value: 'C:\\inetpub\\wwwroot' },
+    });
+    fireEvent.change(screen.getByLabelText('哈希值'), {
+      target: { value: '0123456789abcdef0123456789abcdef' },
+    });
+    fireEvent.change(screen.getByLabelText('文件内容'), {
+      target: { value: 'eval(' },
+    });
+    fireEvent.change(screen.getByLabelText('Everything 实时搜索'), {
+      target: { value: 'shell' },
+    });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('everything_search_page', {
+        request: expect.objectContaining({
+          query: 'shell ext:php;aspx md5:0123456789abcdef0123456789abcdef content:"eval("',
+          path: 'C:\\inetpub\\wwwroot',
+          offset: 0,
+          maxResults: 50,
+          filesOnly: true,
+          includeTotalCount: true,
+        }),
+      });
+    });
+  });
+
+  it('pages Everything results with offset instead of increasing the search limit', async () => {
+    const requests: any[] = [];
+    invokeMock.mockImplementation(async (command: string, args?: any) => {
+      if (command === 'everything_search_page') {
+        const request = args?.request;
+        requests.push(request);
+        const pageName = request.offset === 50 ? 'shell-page-2.php' : 'shell-page-1.php';
+        return {
+          results: [
+            {
+              fullPath: `C:\\inetpub\\wwwroot\\${pageName}`,
+              name: pageName,
+              parentPath: 'C:\\inetpub\\wwwroot',
+              extension: 'php',
+              size: 512,
+              dateModified: '2026-05-26T09:00:00',
+            },
+          ],
+          totalCount: 75,
+          offset: request.offset,
+          limit: 50,
+          hasMore: request.offset === 0,
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="ioc_file_search"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('Everything 实时搜索'), {
+      target: { value: 'shell' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('shell-page-1.php')).toBeInTheDocument();
+    });
+
+    expect(requests[0]).toMatchObject({
+      query: 'shell',
+      offset: 0,
+      maxResults: 50,
+      includeTotalCount: true,
+    });
+
+    const pager = screen.getByLabelText('Everything search pagination');
+    fireEvent.click(within(pager).getByText('2'));
+
+    await waitFor(() => {
+      expect(screen.getByText('shell-page-2.php')).toBeInTheDocument();
+    });
+
+    expect(requests[1]).toMatchObject({
+      query: 'shell',
+      offset: 50,
+      maxResults: 50,
+      includeTotalCount: true,
+    });
+  });
+
+  it('does not run full-disk Everything content searches without a directory', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="ioc_file_search"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /高级/ }));
+    fireEvent.change(screen.getByLabelText('文件内容'), {
+      target: { value: 'eval(' },
+    });
+    fireEvent.change(screen.getByLabelText('Everything 实时搜索'), {
+      target: { value: 'shell' },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('does not use Everything for the generic Windows file scan', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
+      if (command === 'execute_local_command') {
+        expect(args?.command).toContain('RECENT_TEMP');
+        return {
+          success: true,
+          stdout: [
+            '===RECENT_TEMP===',
+            '[]',
+            '===USER_WRITABLE_EXECUTABLES===',
+            '[]',
+            '===RECENT_WEBROOT===',
+            '[]',
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="file_scan"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('采集诊断')).toBeInTheDocument();
+    });
+
+    expect(invokeMock).not.toHaveBeenCalledWith('everything_search_page', expect.anything());
+  });
+
   it('flags sensitive and risky Windows environment variables', async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'execute_local_command') {

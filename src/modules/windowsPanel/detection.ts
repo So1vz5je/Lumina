@@ -106,6 +106,33 @@ const legacyPanelMeta: Record<string, { panelType: string; name: string; path: s
   },
 };
 
+const indexedPanelMeta = [
+  {
+    panelType: 'baota_windows',
+    name: 'BaoTa Windows',
+    markers: ['btsoft', 'btpanel'],
+    siteDirs: ['wwwroot', 'websites'],
+  },
+  {
+    panelType: 'phpstudy',
+    name: 'PhpStudy Pro',
+    markers: ['phpstudy_pro', 'phpstudy', 'xp.cn'],
+    siteDirs: ['www'],
+  },
+  {
+    panelType: 'xampp',
+    name: 'XAMPP',
+    markers: ['xampp'],
+    siteDirs: ['htdocs'],
+  },
+  {
+    panelType: 'wampserver',
+    name: 'WampServer',
+    markers: ['wamp64', 'wamp', 'wampserver'],
+    siteDirs: ['www'],
+  },
+] as const;
+
 function isRecord(value: unknown): value is DetailRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -329,6 +356,156 @@ function parseJsonTextArray(content: string): string[] {
   return [];
 }
 
+function normalizeWindowsPath(path: string): string {
+  return path.trim().replace(/\//g, '\\').replace(/\\+$/, '');
+}
+
+function findIndexedPanelMeta(path: string): typeof indexedPanelMeta[number] | undefined {
+  const segments = normalizeWindowsPath(path)
+    .split('\\')
+    .map((segment) => segment.toLowerCase());
+
+  return indexedPanelMeta.find((meta) => (
+    meta.markers.some((marker) => segments.includes(marker.toLowerCase()))
+  ));
+}
+
+function deriveRootFromMarker(path: string, markers: readonly string[]): string {
+  const segments = normalizeWindowsPath(path).split('\\');
+  const markerIndex = segments.findIndex((segment) => (
+    markers.some((marker) => segment.toLowerCase() === marker.toLowerCase())
+  ));
+
+  return markerIndex >= 0 ? segments.slice(0, markerIndex + 1).join('\\') : '-';
+}
+
+function deriveSiteRoot(path: string, installPath: string, siteDirs: readonly string[]): string {
+  const segments = normalizeWindowsPath(path).split('\\');
+  const siteIndex = segments.findIndex((segment) => (
+    siteDirs.some((siteDir) => segment.toLowerCase() === siteDir.toLowerCase())
+  ));
+
+  if (siteIndex >= 0) return segments.slice(0, siteIndex + 1).join('\\');
+  const firstSiteDir = siteDirs[0];
+  return firstSiteDir ? `${installPath}\\${firstSiteDir}` : installPath;
+}
+
+function deriveSiteFromIndexedPath(path: string, siteRoot: string): DetailRecord | null {
+  const normalizedPath = normalizeWindowsPath(path);
+  const normalizedRoot = normalizeWindowsPath(siteRoot);
+  if (!normalizedPath.toLowerCase().startsWith(normalizedRoot.toLowerCase())) return null;
+
+  const relative = normalizedPath.slice(normalizedRoot.length).replace(/^\\+/, '');
+  const siteName = relative.split('\\')[0]?.trim();
+  if (!siteName) return null;
+
+  return {
+    name: siteName,
+    path: `${normalizedRoot}\\${siteName}`,
+  };
+}
+
+function isIndexedLogOrConfig(path: string, extension: string, name: string): boolean {
+  const lowerPath = path.toLowerCase();
+  const lowerName = name.toLowerCase();
+  const lowerExtension = extension.replace(/^\./, '').toLowerCase();
+
+  return ['log', 'conf', 'config', 'ini', 'json'].includes(lowerExtension)
+    || lowerName.includes('log')
+    || lowerName.includes('conf')
+    || lowerPath.includes('\\logs\\')
+    || lowerPath.includes('\\log\\');
+}
+
+function isIndexedShortcutNoise(path: string, extension: string): boolean {
+  const lowerPath = normalizeWindowsPath(path).toLowerCase();
+  const lowerExtension = extension.replace(/^\./, '').toLowerCase();
+
+  return lowerExtension === 'lnk'
+    || lowerExtension === 'url'
+    || lowerPath.includes('\\microsoft\\windows\\start menu\\')
+    || lowerPath.includes('\\programdata\\microsoft\\windows\\start menu\\');
+}
+
+function appendUniqueRecord(records: DetailRecord[], key: string, row: DetailRecord): void {
+  const value = String(row[key] ?? '').toLowerCase();
+  if (!value || records.some((record) => String(record[key] ?? '').toLowerCase() === value)) return;
+  records.push(row);
+}
+
+function deriveEverythingDetails(rows: DetailRecord[]): {
+  installs: DetailRecord[];
+  sites: DetailRecord[];
+  logs: DetailRecord[];
+} {
+  const installs: DetailRecord[] = [];
+  const sites: DetailRecord[] = [];
+  const logs: DetailRecord[] = [];
+
+  rows.forEach((row) => {
+    const fullPath = readString(row, ['FullPath', 'path', 'Path'], '');
+    if (!fullPath) return;
+
+    const name = readString(row, ['Name', 'name'], '');
+    const extension = readString(row, ['Extension', 'extension'], '');
+    if (isIndexedShortcutNoise(fullPath, extension)) return;
+
+    const meta = findIndexedPanelMeta(fullPath);
+    if (!meta) return;
+
+    const installPath = deriveRootFromMarker(fullPath, meta.markers);
+    if (installPath === '-') return;
+
+    const siteRoot = deriveSiteRoot(fullPath, installPath, meta.siteDirs);
+    appendUniqueRecord(installs, 'path', {
+      panel_type: meta.panelType,
+      name: meta.name,
+      path: installPath,
+      site_root: siteRoot,
+      service_state: '-',
+      evidence: 'everything_index',
+      detected: true,
+      site_count: 0,
+      notes: 'indexed by Everything',
+    });
+
+    const site = deriveSiteFromIndexedPath(fullPath, siteRoot);
+    if (site) {
+      appendUniqueRecord(sites, 'path', {
+        source: 'everything',
+        panel_type: meta.panelType,
+        name: site.name,
+        path: site.path,
+        state: 'Indexed',
+        bindings: '-',
+        owner_panel: meta.name,
+        last_modified: readString(row, ['LastWriteTime', 'LastModified', 'DateModified']),
+      });
+    }
+
+    if (isIndexedLogOrConfig(fullPath, extension, name)) {
+      appendUniqueRecord(logs, 'path', {
+        source: meta.panelType,
+        path: fullPath,
+        size: row.Length ?? row.length ?? row.Size ?? row.size,
+        last_modified: readString(row, ['LastWriteTime', 'LastModified', 'DateModified']),
+        note: 'Everything indexed log/config metadata',
+      });
+    }
+  });
+
+  installs.forEach((install) => {
+    const panelType = readString(install, ['panel_type'], '');
+    const siteRoot = readString(install, ['site_root'], '').toLowerCase();
+    install.site_count = sites.filter((site) => (
+      readString(site, ['panel_type'], '') === panelType
+        && readString(site, ['path'], '').toLowerCase().startsWith(siteRoot)
+    )).length;
+  });
+
+  return { installs, sites, logs };
+}
+
 function parseSections(output: string): Record<string, string> {
   const parts = output.split(/===(\w+)===/);
   const sections: Record<string, string> = {};
@@ -424,20 +601,36 @@ function parseLegacySections(sections: Record<string, string>): WindowsPanelDete
 
 export function parseWindowsPanelSections(output: string): WindowsPanelDetectionData {
   const sections = parseSections(output);
-  const hasStructuredSections = ['PANELS', 'IIS_SITES', 'SERVICES', 'LOGS', 'DIAGNOSTICS']
+  const hasStructuredSections = ['PANELS', 'ES_MATCHES', 'IIS_SITES', 'SERVICES', 'LOGS', 'DIAGNOSTICS']
     .some((sectionName) => sections[sectionName] !== undefined);
 
   if (!hasStructuredSections) {
     return parseLegacySections(sections);
   }
 
+  const panelRows = parseJsonRecords(sections.PANELS || '');
+  const everythingDetails = deriveEverythingDetails(parseJsonRecords(sections.ES_MATCHES || ''));
+  const installs = [...panelRows, ...everythingDetails.installs];
+  const detectedInstalls = [
+    ...panelRows.filter((panel) => readBool(panel, ['Detected', 'detected'])),
+    ...everythingDetails.installs,
+  ];
+  const sites = [
+    ...parseJsonRecords(sections.SITES || ''),
+    ...everythingDetails.sites,
+  ];
+  const logs = [
+    ...parseJsonRecords(sections.LOGS || ''),
+    ...everythingDetails.logs,
+  ];
+
   return normalizeWindowsPanelDetection({
-    installs: parseJsonRecords(sections.PANELS || ''),
-    detected_installs: parseJsonRecords(sections.PANELS || '').filter((panel) => readBool(panel, ['Detected', 'detected'])),
-    sites: parseJsonRecords(sections.SITES || ''),
+    installs,
+    detected_installs: detectedInstalls,
+    sites,
     iis_sites: parseJsonRecords(sections.IIS_SITES || ''),
     services: parseJsonRecords(sections.SERVICES || ''),
-    logs: parseJsonRecords(sections.LOGS || ''),
+    logs,
     diagnostics: parseJsonTextArray(sections.DIAGNOSTICS || ''),
   });
 }

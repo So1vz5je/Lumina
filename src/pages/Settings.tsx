@@ -52,6 +52,16 @@ interface AiConfigView {
   maxTokens: number;
   showReasoning: boolean;
   toolsEnabled: boolean;
+  maxToolCalls: number;
+}
+
+interface WorkspaceConfigView {
+  rootPath: string;
+  exportsPath: string;
+  aiLogsPath: string;
+  collectionsPath: string;
+  tempPath: string;
+  adminRunsPath: string;
 }
 
 const defaultAiConfig: AiConfigView = {
@@ -64,6 +74,7 @@ const defaultAiConfig: AiConfigView = {
   maxTokens: 2048,
   showReasoning: true,
   toolsEnabled: true,
+  maxToolCalls: 12,
 };
 
 export default function Settings({
@@ -79,6 +90,7 @@ export default function Settings({
   const [aiApiKey, setAiApiKey] = useState('');
   const [aiSaving, setAiSaving] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
+  const [workspaceConfig, setWorkspaceConfig] = useState<WorkspaceConfigView | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +110,26 @@ export default function Settings({
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    invoke<WorkspaceConfigView>('workspace_get_config')
+      .then((config) => {
+        if (cancelled || !config || typeof config !== 'object') return;
+        setWorkspaceConfig(config);
+        if (config.exportsPath) {
+          setDefaultDownloadPath(config.exportsPath);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWorkspaceConfig(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setDefaultDownloadPath]);
+
   const applyTheme = (option: ThemeOption) => {
     setWallpaper(option.key);
     setIsDarkMode(option.dark);
@@ -105,20 +137,26 @@ export default function Settings({
     localStorage.setItem('theme', option.dark ? 'dark' : 'light');
   };
 
-  const handleChangeDownloadPath = async () => {
+  const handleChangeWorkspacePath = async () => {
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        defaultPath: defaultDownloadPath || undefined,
+        defaultPath: workspaceConfig?.rootPath || defaultDownloadPath || undefined,
       });
 
       if (selected) {
-        setDefaultDownloadPath(selected as string);
-        message.success('已更新默认下载路径');
+        const saved = await invoke<WorkspaceConfigView>('workspace_save_config', {
+          request: {
+            rootPath: selected as string,
+          },
+        });
+        setWorkspaceConfig(saved);
+        setDefaultDownloadPath(saved.exportsPath);
+        message.success('工作区已更新');
       }
-    } catch {
-      message.error('无法打开目录选择器');
+    } catch (error) {
+      message.error(`工作区更新失败: ${error}`);
     }
   };
 
@@ -135,6 +173,7 @@ export default function Settings({
           maxTokens: aiConfig.maxTokens,
           showReasoning: aiConfig.showReasoning,
           toolsEnabled: aiConfig.toolsEnabled,
+          maxToolCalls: aiConfig.maxToolCalls,
         },
       });
       setAiConfig({ ...defaultAiConfig, ...saved });
@@ -160,6 +199,7 @@ export default function Settings({
           maxTokens: aiConfig.maxTokens,
           showReasoning: aiConfig.showReasoning,
           toolsEnabled: aiConfig.toolsEnabled,
+          maxToolCalls: aiConfig.maxToolCalls,
         },
       });
       if (result.success) {
@@ -213,13 +253,18 @@ export default function Settings({
           <div className="settings-section-head">
             <div>
               <Text className="settings-section-kicker">输出</Text>
-              <Title level={5}>导出路径</Title>
+              <Title level={5}>工作区路径</Title>
             </div>
           </div>
-          <div className="settings-output-path">
-            <strong>{defaultDownloadPath || '未设置'}</strong>
-            <Button icon={<FolderOpenOutlined />} onClick={handleChangeDownloadPath} type="primary">
-              更改路径
+          <div className="settings-output-path settings-workspace-path">
+            <div>
+              <Text className="settings-muted-label">根目录</Text>
+              <strong>{workspaceConfig?.rootPath || '未设置'}</strong>
+              <Text className="settings-muted-label">导出路径</Text>
+              <strong>{workspaceConfig?.exportsPath || defaultDownloadPath || '未设置'}</strong>
+            </div>
+            <Button icon={<FolderOpenOutlined />} onClick={handleChangeWorkspacePath} type="primary">
+              更改工作区
             </Button>
           </div>
         </section>
@@ -281,6 +326,23 @@ export default function Settings({
                     }
                   }}
                   placeholder={aiConfig.hasApiKey ? `已保存 ${aiConfig.apiKeyPreview}` : 'sk-...'}
+                />
+              </label>
+              <label className="settings-field settings-ai-limit-field">
+                <span>工具调用上限</span>
+                <Input
+                  aria-label="工具调用上限"
+                  max={50}
+                  min={1}
+                  type="number"
+                  value={aiConfig.maxToolCalls}
+                  onChange={(event) => {
+                    const value = Number.parseInt(event.target.value, 10);
+                    setAiConfig((current) => ({
+                      ...current,
+                      maxToolCalls: Number.isFinite(value) ? Math.min(50, Math.max(1, value)) : 1,
+                    }));
+                  }}
                 />
               </label>
             </div>

@@ -45,7 +45,7 @@ import RemoteWorkspace from './pages/RemoteWorkspace';
 import Scan from './pages/Scan';
 import Results from './pages/Results';
 import { RemoteWorkspaceProvider } from './modules/remote/RemoteWorkspaceProvider';
-import type { AnalysisResult } from './types/analysis';
+import type { AnalysisResult, RiskFinding } from './types/analysis';
 import { isTauriRuntime } from './utils/runtime';
 
 import './App.css';
@@ -57,6 +57,10 @@ type OsType = 'Windows' | 'Linux' | 'macOS' | 'Unknown';
 type PrivilegeMode = 'none' | 'sudo' | 'su';
 
 type MenuItem = Required<MenuProps>['items'][number];
+
+interface WorkspaceConfigView {
+  exportsPath?: string;
+}
 
 interface WindowsWorkspaceModule {
   key: string;
@@ -133,6 +137,14 @@ const WINDOWS_MODULE_WORKSPACES: WindowsModuleWorkspace[] = [
       { key: 'win_defender', label: 'Defender 状态' },
       { key: 'defender_history', label: 'Defender 检测历史' },
       { key: 'powershell_deep', label: 'PowerShell 深度' },
+    ],
+  },
+  {
+    key: 'ioc_file_search',
+    icon: <FileSearchOutlined />,
+    label: 'IOC 文件搜索',
+    modules: [
+      { key: 'ioc_file_search', label: 'IOC 文件搜索' },
     ],
   },
   {
@@ -438,6 +450,11 @@ const buildWindowsMenuItems = (mode: AnalysisMode): MenuItem[] => {
       ],
     },
     {
+      key: 'ioc_file_search',
+      icon: <FileSearchOutlined />,
+      label: 'IOC 文件搜索',
+    },
+    {
       key: 'windows_forensics_group',
       icon: <FileSearchOutlined />,
       label: '文件与痕迹',
@@ -609,6 +626,7 @@ function App() {
     return saved ? parseFloat(saved) : 0.3;
   });
   const [scanResults, setScanResults] = useState<AnalysisResult[]>([]);
+  const [scanRiskFindings, setScanRiskFindings] = useState<RiskFinding[]>([]);
   const [remoteWorkspaceSeed, setRemoteWorkspaceSeed] = useState(0);
   const [wallpaperLoaded, setWallpaperLoaded] = useState<boolean>(false);
 
@@ -622,6 +640,22 @@ function App() {
     wallpaper.endsWith('.webm') ||
     wallpaper.endsWith('.mov')
   );
+
+  useEffect(() => {
+    if (!desktopRuntime) return undefined;
+    let cancelled = false;
+    invoke<WorkspaceConfigView>('workspace_get_config')
+      .then((config) => {
+        if (!cancelled && config?.exportsPath) {
+          setDefaultDownloadPath(config.exportsPath);
+          localStorage.setItem('defaultDownloadPath', config.exportsPath);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopRuntime]);
 
   // 处理壁纸路径：本地文件需要转换，网络 URL 和相对路径直接使用
   const wallpaperSrc = useMemo(() => {
@@ -640,6 +674,7 @@ function App() {
     setOsType(os);
     setMode('local');
     setScanResults([]);
+    setScanRiskFindings([]);
     setCurrentModule('scan');
     setPrivilegeMode('none');
     message.success(`本地分析模式 - 检测到系统: ${os} `);
@@ -665,6 +700,7 @@ function App() {
     setSudoPassword(password);
     setMode('remote');
     setScanResults([]);
+    setScanRiskFindings([]);
     setCurrentModule(nextOs === 'Linux' ? 'system_info' : 'remote_workspace');
     message.success(`远程分析模式 - 系统: ${detectedOs} `);
   };
@@ -677,6 +713,7 @@ function App() {
     setMode('none');
     setOsType('Unknown');
     setScanResults([]);
+    setScanRiskFindings([]);
     setCurrentModule('system_info');
     setPrivilegeMode('none');
   };
@@ -807,6 +844,7 @@ function App() {
                 onBackToSelect={() => {
                   setMode('none');
                   setScanResults([]);
+                  setScanRiskFindings([]);
                   setCurrentModule('system_info');
                 }}
                 wallpaper={wallpaper}
@@ -833,15 +871,16 @@ function App() {
           ) : currentModule === 'scan' ? (
             <div key={currentModule} className="analysis-module-view analysis-module-enter" data-module-key={currentModule}>
               <Scan
-                onComplete={(results) => {
-                  setScanResults(results);
+                onComplete={(payload) => {
+                  setScanResults(payload.moduleResults);
+                  setScanRiskFindings(payload.riskFindings);
                   setCurrentModule('results');
                 }}
               />
             </div>
           ) : currentModule === 'results' ? (
             <div key={currentModule} className="analysis-module-view analysis-module-enter" data-module-key={currentModule}>
-              <Results results={scanResults} />
+              <Results results={scanResults} riskFindings={scanRiskFindings} />
             </div>
           ) : activeWindowsWorkspace ? (
             <div key={activeWindowsWorkspace.key} className="analysis-module-view analysis-module-enter" data-module-key={activeWindowsWorkspace.key}>

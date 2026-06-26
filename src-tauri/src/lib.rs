@@ -1,12 +1,15 @@
-mod analyzer;
 mod ai;
+mod analyzer;
+mod everything;
 mod license;
 mod remote;
 mod ssh;
 mod windows_database;
+mod workspace;
 
-use analyzer::AnalysisResult;
+use analyzer::ScanRunPayload;
 use encoding_rs::GBK;
+use everything::{EverythingAvailability, EverythingSearchRequest, EverythingSearchResult};
 use log::{error, info, warn};
 use remote::connection_manager::ConnectionManager;
 use remote::terminal_manager::{RemoteTerminalSession, TerminalManager, TerminalOutputEvent};
@@ -236,18 +239,23 @@ fn get_system_info() -> SystemInfo {
 }
 
 #[tauri::command]
-async fn run_scan(selected_modules: Option<Vec<String>>) -> Vec<AnalysisResult> {
+async fn run_scan(selected_modules: Option<Vec<String>>) -> ScanRunPayload {
     let selected_count = selected_modules.as_ref().map(|modules| modules.len());
     info!(
         "Starting scan with selected module count: {:?}",
         selected_count
     );
-    let results =
-        tokio::task::spawn_blocking(move || analyzer::run_scan_sync(selected_modules.as_deref()))
-            .await
-            .unwrap_or_default();
-    info!("Scan completed with {} results", results.len());
-    results
+    let payload = tokio::task::spawn_blocking(move || {
+        analyzer::run_scan_payload_sync(selected_modules.as_deref())
+    })
+    .await
+    .unwrap_or_default();
+    info!(
+        "Scan completed with {} module results and {} risk findings",
+        payload.module_results.len(),
+        payload.risk_findings.len()
+    );
+    payload
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -545,6 +553,27 @@ async fn execute_local_command(command: String) -> CommandResult {
     run_local_command(&command)
 }
 
+#[tauri::command]
+fn everything_available(app: tauri::AppHandle) -> EverythingAvailability {
+    everything::check_available(&app)
+}
+
+#[tauri::command]
+async fn everything_search(
+    app: tauri::AppHandle,
+    request: EverythingSearchRequest,
+) -> Result<Vec<EverythingSearchResult>, String> {
+    everything::search(app, request).await
+}
+
+#[tauri::command]
+async fn everything_search_page(
+    app: tauri::AppHandle,
+    request: EverythingSearchRequest,
+) -> Result<everything::EverythingSearchPageResponse, String> {
+    everything::search_page(app, request).await
+}
+
 fn build_local_command_plan(command: &str, target_is_windows: bool) -> (String, Vec<String>) {
     if !target_is_windows {
         return (
@@ -676,7 +705,11 @@ fn run_local_process_with_env(
     }
 }
 
-fn decode_process_output(bytes: &[u8]) -> String {
+pub(crate) fn decode_process_output(bytes: &[u8]) -> String {
+    if let Some(text) = decode_utf16_process_output(bytes) {
+        return text;
+    }
+
     match String::from_utf8(bytes.to_vec()) {
         Ok(text) => text,
         Err(_) => {
@@ -688,6 +721,56 @@ fn decode_process_output(bytes: &[u8]) -> String {
             }
         }
     }
+}
+
+fn decode_utf16_process_output(bytes: &[u8]) -> Option<String> {
+    if bytes.len() < 2 {
+        return None;
+    }
+
+    if bytes.starts_with(&[0xff, 0xfe]) {
+        return Some(decode_utf16_units(&bytes[2..], true));
+    }
+
+    if bytes.starts_with(&[0xfe, 0xff]) {
+        return Some(decode_utf16_units(&bytes[2..], false));
+    }
+
+    let pairs = bytes.len() / 2;
+    if pairs < 2 {
+        return None;
+    }
+
+    let odd_zeroes = bytes
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .filter(|byte| **byte == 0)
+        .count();
+    let even_zeroes = bytes.iter().step_by(2).filter(|byte| **byte == 0).count();
+
+    if odd_zeroes * 2 >= pairs {
+        Some(decode_utf16_units(bytes, true))
+    } else if even_zeroes * 2 >= pairs {
+        Some(decode_utf16_units(bytes, false))
+    } else {
+        None
+    }
+}
+
+fn decode_utf16_units(bytes: &[u8], little_endian: bool) -> String {
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|chunk| {
+            if little_endian {
+                u16::from_le_bytes([chunk[0], chunk[1]])
+            } else {
+                u16::from_be_bytes([chunk[0], chunk[1]])
+            }
+        })
+        .collect();
+
+    String::from_utf16_lossy(&units)
 }
 
 #[tauri::command]
@@ -761,12 +844,19 @@ pub fn run() {
             ssh_disconnect,
             ssh_is_connected,
             execute_local_command,
+            everything_available,
+            everything_search,
+            everything_search_page,
             windows_database::windows_database_readonly,
             windows_database::windows_database_mutation,
             ai::ai_get_config,
             ai::ai_save_config,
             ai::ai_test_config,
             ai::ai_send_message,
+            ai::ai_cancel_message,
+            ai::ai_resolve_admin_approval,
+            workspace::workspace_get_config,
+            workspace::workspace_save_config,
             get_machine_info,
             verify_license,
             activate_license,

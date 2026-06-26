@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
-import { Card, Row, Col, Progress, Typography, Descriptions, Spin, Table, Tag, List, Input, Button, Space, Statistic, Checkbox, Popover, Dropdown, Modal, Select, Upload, message, Empty, Tabs, Switch, Alert, Collapse } from 'antd';
+import { Card, Row, Col, Progress, Typography, Descriptions, Spin, Table, Tag, List, Input, Button, Space, Statistic, Checkbox, Popover, Dropdown, Modal, Select, Upload, message, Empty, Tabs, Switch, Alert, Collapse, Pagination } from 'antd';
 import { invoke } from '@tauri-apps/api/core';
 import { ReloadOutlined, UserOutlined, ApiOutlined, DatabaseOutlined, DesktopOutlined, SettingOutlined, DownloadOutlined, EyeOutlined, NumberOutlined, UploadOutlined, MoreOutlined, SearchOutlined, FileSearchOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { save } from '@tauri-apps/plugin-dialog';
@@ -82,6 +82,34 @@ interface WindowsLogPageInfo {
     totalCount: number | null;
 }
 
+interface EverythingSearchRequest {
+    query: string;
+    maxResults?: number;
+    offset?: number;
+    path?: string;
+    filesOnly?: boolean;
+    sort?: string;
+    sortDescending?: boolean;
+    includeTotalCount?: boolean;
+}
+
+interface EverythingSearchResult {
+    fullPath: string;
+    name: string;
+    parentPath: string;
+    extension: string;
+    size?: number | null;
+    dateModified?: string | null;
+}
+
+interface EverythingSearchPageResponse {
+    results: EverythingSearchResult[];
+    totalCount?: number | null;
+    offset: number;
+    limit: number;
+    hasMore: boolean;
+}
+
 interface ModuleLoadOptions {
     windowsLogPage?: number;
     windowsLogPageSize?: number;
@@ -109,6 +137,25 @@ const WINDOWS_DATABASE_DEFAULT_PORTS: Record<WindowsDatabaseEngine, number> = {
     sqlserver: 1433,
     postgresql: 5432,
 };
+
+const EVERYTHING_SEARCH_DEBOUNCE_MS = 250;
+const EVERYTHING_LIVE_MAX_RESULTS = 50;
+const MIN_EVERYTHING_LIVE_QUERY_LENGTH = 2;
+const EVERYTHING_HASH_ALGORITHMS = [
+    { label: 'MD5', value: 'md5' },
+    { label: 'SHA1', value: 'sha1' },
+    { label: 'SHA256', value: 'sha256' },
+];
+
+type EverythingHashAlgorithm = 'md5' | 'sha1' | 'sha256';
+
+interface EverythingQueryParts {
+    query: string;
+    extension: string;
+    hashAlgorithm: EverythingHashAlgorithm;
+    hashValue: string;
+    content: string;
+}
 
 const toRecord = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -982,6 +1029,7 @@ const moduleLabels: Record<string, string> = {
     dns_config: 'DNS配置',
     ssh_keys: 'SSH密钥',
     sudo_config: 'Sudo配置',
+    ioc_file_search: 'IOC 文件搜索',
     file_scan: '文件扫描',
     suspicious_files: '可疑文件',
     webshell_scan: 'Webshell扫描',
@@ -1069,6 +1117,7 @@ const windowsModuleMeta: Record<string, { title: string; group: string; descript
     win_app_log: { title: 'Application 日志', group: '安全与日志', description: 'Windows Application 事件日志近端记录。' },
     win_powershell_log: { title: 'PowerShell 日志', group: '安全与日志', description: 'Windows PowerShell 事件日志和脚本执行痕迹。' },
     powershell_deep: { title: 'PowerShell 深度', group: '安全与日志', description: '4103/4104 脚本块日志、Windows PowerShell 事件和 PSReadLine 历史。' },
+    ioc_file_search: { title: 'IOC 文件搜索', group: '文件与痕迹', description: '通过 Everything 索引按文件名、路径、扩展名和日期条件定位文件。' },
     file_scan: { title: '文件扫描', group: '文件与痕迹', description: '临时目录、用户可写目录和 Web 根目录中的近期/可执行文件。' },
     suspicious_files: { title: '可疑文件', group: '文件与痕迹', description: '临时目录可执行文件、隐藏可执行文件和近期变更。' },
     execution_trace: { title: '执行痕迹', group: '文件与痕迹', description: 'Prefetch、Amcache、ShimCache 等程序执行痕迹入口。' },
@@ -1245,6 +1294,22 @@ function escapePowerShellSingleQuoted(value: string): string {
     return value.replace(/'/g, "''");
 }
 
+function quotePowerShellLiteral(value: string): string {
+    return `'${escapePowerShellSingleQuoted(value)}'`;
+}
+
+function buildWindowsPreviewTextCommand(path: string): string {
+    return `$ErrorActionPreference='Stop'; Get-Content -LiteralPath ${quotePowerShellLiteral(path)} -Encoding UTF8 -TotalCount 5000 -ErrorAction Stop`;
+}
+
+function buildWindowsPreviewBase64Command(path: string): string {
+    return `$ErrorActionPreference='Stop'; $path=${quotePowerShellLiteral(path)}; [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))`;
+}
+
+function buildWindowsPreviewHexCommand(path: string): string {
+    return `$ErrorActionPreference='Stop'; $path=${quotePowerShellLiteral(path)}; $stream=[IO.File]::OpenRead($path); try { $buffer=New-Object byte[] 65536; $read=$stream.Read($buffer,0,$buffer.Length); if ($read -le 0) { '' } else { -join ($buffer[0..($read-1)] | ForEach-Object { $_.ToString('x2') }) } } finally { $stream.Dispose() }`;
+}
+
 function buildWindowsWebshellScanCommand(customRoots = ''): string {
     const customWindowsRoots = customRoots
         .split(/\s+/)
@@ -1291,6 +1356,60 @@ function formatFileSize(bytes: any): string {
     }
     const rounded = Number.isInteger(value) ? String(value) : value.toFixed(1);
     return `${rounded} ${units[unitIndex]}`;
+}
+
+function normalizeEverythingExtension(result: EverythingSearchResult): string {
+    const explicit = result.extension?.trim();
+    const inferred = result.name.includes('.') ? result.name.split('.').pop() : '';
+    const extension = explicit || inferred || '';
+    if (!extension) return '';
+    return extension.startsWith('.') ? extension : `.${extension}`;
+}
+
+function normalizeEverythingExtensionFilter(value: string): string {
+    return value
+        .split(/[,\s;]+/)
+        .map((item) => item.trim().replace(/^\.+/, '').toLowerCase())
+        .filter(Boolean)
+        .join(';');
+}
+
+function quoteEverythingValue(value: string): string {
+    return `"${value.trim().replace(/"/g, '\\"')}"`;
+}
+
+function isMeaningfulEverythingLiveQuery(value: string): boolean {
+    return value.trim().replace(/[*?]/g, '').length >= MIN_EVERYTHING_LIVE_QUERY_LENGTH;
+}
+
+function buildEverythingSearchQuery(parts: EverythingQueryParts): string {
+    const tokens: string[] = [];
+    const query = parts.query.trim();
+    const extension = normalizeEverythingExtensionFilter(parts.extension);
+    const hashValue = parts.hashValue.trim();
+    const content = parts.content.trim();
+
+    if (query) tokens.push(query);
+    if (extension) tokens.push(`ext:${extension}`);
+    if (hashValue) tokens.push(`${parts.hashAlgorithm}:${hashValue}`);
+    if (content) tokens.push(`content:${quoteEverythingValue(content)}`);
+
+    return tokens.join(' ');
+}
+
+function formatEverythingDate(value?: string | null): string {
+    return (value || '')
+        .replace('T', ' ')
+        .replace(/\.\d+Z?$/, '')
+        .replace(/Z$/, '');
+}
+
+async function searchEverythingFiles(request: EverythingSearchRequest): Promise<EverythingSearchResult[]> {
+    return invoke<EverythingSearchResult[]>('everything_search', { request });
+}
+
+async function searchEverythingFilesPage(request: EverythingSearchRequest): Promise<EverythingSearchPageResponse> {
+    return invoke<EverythingSearchPageResponse>('everything_search_page', { request });
 }
 
 function buildCollectionDiagnostic(output: string, mode: 'local' | 'remote', sourceKey?: string): CollectionDiagnostic | null {
@@ -1390,6 +1509,37 @@ function buildCollectionDiagnostic(output: string, mode: 'local' | 'remote', sou
 
 function buildWindowsPowerShellCommand(script: string): string {
     return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/\s+/g, ' ').trim()}"`;
+}
+
+function buildWindowsPanelDetectionCommand(): string {
+    return buildWindowsPowerShellCommand(`
+        $diagnostics = New-Object System.Collections.Generic.List[string];
+        function Test-ExistingPath($path) { return (-not [string]::IsNullOrWhiteSpace($path)) -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue); }
+        function Convert-ToJsonArray([object[]]$items, [int]$depth) { $array = @($items); ConvertTo-Json -Compress -Depth $depth -InputObject $array; }
+        function Get-FirstExistingPath($paths) { foreach ($path in @($paths)) { if (Test-ExistingPath $path) { return $path; } }; return ''; }
+        function Test-TextMatch($value, $patterns) { if ([string]::IsNullOrWhiteSpace([string]$value)) { return $false; }; $text = [string]$value; foreach ($pattern in @($patterns)) { if (-not [string]::IsNullOrWhiteSpace([string]$pattern) -and $text.IndexOf([string]$pattern, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true; } }; return $false; }
+        function Get-SiteCount($root) { if (-not (Test-ExistingPath $root)) { return 0; }; return @((Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Select-Object -First 200)).Count; }
+        function Get-PanelSites($panelType, $panelName, $siteRoot) { if (-not (Test-ExistingPath $siteRoot)) { return @(); }; @(Get-ChildItem -LiteralPath $siteRoot -Directory -ErrorAction SilentlyContinue | Select-Object -First 200 | ForEach-Object { [pscustomobject]@{ Source=$panelType; PanelType=$panelType; Name=$_.Name; Path=$_.FullName; State='Present'; Bindings='-'; OwnerPanel=$panelName; Length=0; LastWriteTime=$_.LastWriteTime.ToString('yyyy-MM-ddTHH:mm:ss'); } }); }
+        function Get-PathMetadata($source, $path, $note) { if (-not (Test-ExistingPath $path)) { return $null; }; try { $item = Get-Item -LiteralPath $path -ErrorAction Stop; $length = if ($item.PSIsContainer) { 0 } else { [int64]$item.Length }; return [pscustomobject]@{ Source=$source; Path=$item.FullName; Length=$length; LastWriteTime=$item.LastWriteTime.ToString('yyyy-MM-ddTHH:mm:ss'); Note=$note; }; } catch { return $null; } }
+        function Get-RelatedServices($source, $patterns, $paths) { @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object { (Test-TextMatch $_.Name $patterns) -or (Test-TextMatch $_.DisplayName $patterns) -or (Test-TextMatch $_.PathName $patterns) -or (Test-TextMatch $_.PathName $paths) } | Select-Object -First 80 | ForEach-Object { [pscustomobject]@{ Source=$source; Name=$_.Name; DisplayName=$_.DisplayName; State=$_.State; StartMode=$_.StartMode; PathName=$_.PathName; ProcessId=$_.ProcessId; } }); }
+        function Get-UninstallEvidence($patterns) { $keys = @('HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'); foreach ($key in $keys) { foreach ($entry in @(Get-ItemProperty -Path $key -ErrorAction SilentlyContinue)) { if ((Test-TextMatch $entry.DisplayName $patterns) -or (Test-TextMatch $entry.InstallLocation $patterns)) { return [string]$entry.DisplayName; } } }; return ''; }
+        function Get-EsPath { $processPath = (Get-Process -Id $PID -ErrorAction SilentlyContinue).Path; $processDir = if ([string]::IsNullOrWhiteSpace($processPath)) { '' } else { Split-Path -Parent $processPath; }; $cwd = (Get-Location).Path; $candidates = @($env:LUMINA_ES_PATH, (Join-Path $cwd 'src-tauri\\bin\\everything\\es.exe'), (Join-Path $cwd 'bin\\everything\\es.exe'), (Join-Path $processDir 'bin\\everything\\es.exe'), (Join-Path $processDir 'resources\\bin\\everything\\es.exe'), 'C:\\Program Files\\Everything\\es.exe', 'C:\\Program Files (x86)\\Everything\\es.exe'); foreach ($candidate in $candidates) { if (Test-ExistingPath $candidate) { return $candidate; } }; return ''; }
+        function Convert-EsLine($line, $query) { if ([string]::IsNullOrWhiteSpace($line)) { return $null; }; $columns = $line.TrimEnd([char]13).Split([char]9); if ($columns.Count -lt 6) { return $null; }; $length = [int64]0; [void][Int64]::TryParse(($columns[4] -replace ',', '').Trim(), [ref]$length); return [pscustomobject]@{ Source='everything'; Query=$query; FullPath=$columns[0].TrimStart([char]0xfeff); Name=$columns[1]; ParentPath=$columns[2]; Extension=$columns[3]; Length=$length; LastWriteTime=$columns[5]; }; }
+        function Invoke-EsQuery($esPath, $query, $limit) { if ([string]::IsNullOrWhiteSpace($esPath)) { return @(); }; $args = @('-tsv','-no-header','-full-path-and-name','-name','-path-column','-extension','-size','-date-modified','-date-format','1','-size-format','1','-no-digit-grouping','-timeout','3000','-n',[string]$limit,$query); $lines = @(& $esPath @args 2>$null); @($lines | ForEach-Object { Convert-EsLine $_ $query } | Where-Object { $null -ne $_ }); }
+        function Add-UniqueEsMatch($rows, $seen, $match) { if ($null -eq $match -or [string]::IsNullOrWhiteSpace($match.FullPath)) { return; }; $key = $match.FullPath.ToLowerInvariant(); if ($seen.ContainsKey($key)) { return; }; $seen[$key] = $true; $rows.Add($match) | Out-Null; }
+        $panelDefinitions = @(
+            @{ PanelType='baota_windows'; Name='BaoTa Windows'; Paths=@('C:\\BtSoft'); SiteRoots=@('C:\\wwwroot','C:\\BtSoft\\wwwroot','C:\\BtSoft\\WebSites'); ServicePatterns=@('bt','baota','BtWeb','BtTask','nginx','mysql'); RegistryPatterns=@('bt.cn','baota','BaoTa'); LogPaths=@('C:\\BtSoft\\panel\\logs\\error.log','C:\\BtSoft\\logs\\error.log','C:\\BtSoft\\wwwlogs'); },
+            @{ PanelType='phpstudy'; Name='PhpStudy Pro'; Paths=@('C:\\phpstudy_pro','C:\\phpstudy','C:\\xp.cn'); SiteRoots=@('C:\\phpstudy_pro\\WWW','C:\\phpstudy\\WWW','C:\\xp.cn\\WWW'); ServicePatterns=@('phpstudy','Apache','Apache2.4','mysql','nginx'); RegistryPatterns=@('phpStudy','xp.cn'); LogPaths=@('C:\\phpstudy_pro\\COM\\log\\phpstudy.log','C:\\phpstudy_pro\\Extensions\\Apache2.4.39\\logs\\access.log','C:\\phpstudy_pro\\Extensions\\Nginx1.15.11\\logs\\access.log'); },
+            @{ PanelType='xampp'; Name='XAMPP'; Paths=@('C:\\xampp'); SiteRoots=@('C:\\xampp\\htdocs'); ServicePatterns=@('xampp','Apache','Apache2.4','mysql','mariadb'); RegistryPatterns=@('XAMPP'); LogPaths=@('C:\\xampp\\apache\\logs\\access.log','C:\\xampp\\apache\\logs\\error.log','C:\\xampp\\mysql\\data\\mysql_error.log'); },
+            @{ PanelType='wampserver'; Name='WampServer'; Paths=@('C:\\wamp64','C:\\wamp'); SiteRoots=@('C:\\wamp64\\www','C:\\wamp\\www'); ServicePatterns=@('wamp','wampapache','wampmysqld','Apache','mysql'); RegistryPatterns=@('WampServer','WAMP'); LogPaths=@('C:\\wamp64\\logs\\apache_error.log','C:\\wamp64\\logs\\apache_access.log','C:\\wamp\\logs\\apache_error.log'); }
+        );
+        $panelRows = New-Object System.Collections.Generic.List[object]; $siteRows = New-Object System.Collections.Generic.List[object]; $serviceRows = New-Object System.Collections.Generic.List[object]; $logRows = New-Object System.Collections.Generic.List[object]; $esMatches = New-Object System.Collections.Generic.List[object];
+        $esPath = Get-EsPath; if ([string]::IsNullOrWhiteSpace($esPath)) { $diagnostics.Add('Everything ES.exe is unavailable; using path/service/registry fallback') | Out-Null; } else { $diagnostics.Add(('Everything ES.exe: ' + $esPath)) | Out-Null; $esSeen = @{}; $esQueries = @('phpstudy_pro','phpstudy','xp.cn','BtSoft','btpanel','xampp','wamp64','wampserver','httpd.conf','nginx.conf','phpstudy.log','access.log','error.log'); foreach ($query in $esQueries) { foreach ($match in @(Invoke-EsQuery $esPath $query 80)) { Add-UniqueEsMatch $esMatches $esSeen $match; } }; $diagnostics.Add(('Everything index matches: ' + $esMatches.Count)) | Out-Null; }
+        foreach ($panel in $panelDefinitions) { $installPath = Get-FirstExistingPath $panel.Paths; $siteRoot = Get-FirstExistingPath $panel.SiteRoots; $registryName = Get-UninstallEvidence $panel.RegistryPatterns; $services = @(Get-RelatedServices $panel.PanelType $panel.ServicePatterns $panel.Paths); $detected = (-not [string]::IsNullOrWhiteSpace($installPath)) -or (-not [string]::IsNullOrWhiteSpace($registryName)) -or ($services.Count -gt 0); $siteCount = Get-SiteCount $siteRoot; $evidenceParts = @(); if (-not [string]::IsNullOrWhiteSpace($installPath)) { $evidenceParts += 'path'; }; if (-not [string]::IsNullOrWhiteSpace($registryName)) { $evidenceParts += 'registry'; }; if ($services.Count -gt 0) { $evidenceParts += 'service'; }; if ($siteCount -gt 0) { $evidenceParts += 'site_root'; }; $serviceState = if ($services.Count -gt 0) { (@($services | Select-Object -ExpandProperty State -Unique) -join '; ') } else { '-'; }; $panelRows.Add([pscustomobject]@{ PanelType=$panel.PanelType; Name=$panel.Name; Path=if ([string]::IsNullOrWhiteSpace($installPath)) { $panel.Paths[0] } else { $installPath; }; SiteRoot=if ([string]::IsNullOrWhiteSpace($siteRoot)) { $panel.SiteRoots[0] } else { $siteRoot; }; Detected=$detected; SiteCount=$siteCount; ServiceState=$serviceState; Evidence=if ($evidenceParts.Count -gt 0) { $evidenceParts -join '; ' } else { '-'; }; Notes=if ($detected) { 'detected' } else { 'not found'; }; }) | Out-Null; foreach ($site in @(Get-PanelSites $panel.PanelType $panel.Name $siteRoot)) { $siteRows.Add($site) | Out-Null; }; foreach ($service in $services) { $serviceRows.Add($service) | Out-Null; }; foreach ($logPath in @($panel.LogPaths)) { $meta = Get-PathMetadata $panel.PanelType $logPath 'panel log/config metadata'; if ($null -ne $meta) { $logRows.Add($meta) | Out-Null; } }; }
+        $iisSites = @(); try { Import-Module WebAdministration -ErrorAction Stop; $iisSites = @(Get-Website -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Name=$_.Name; State=[string]$_.State; PhysicalPath=$_.PhysicalPath; Bindings=(@($_.Bindings.Collection | ForEach-Object { $_.bindingInformation }) -join '; '); } }); } catch { $diagnostics.Add('IIS WebAdministration module is unavailable') | Out-Null; if (Test-ExistingPath 'C:\\inetpub\\wwwroot') { $iisSites = @([pscustomobject]@{ Name='Default Web Root'; State='Present'; PhysicalPath='C:\\inetpub\\wwwroot'; Bindings='-'; }); } }
+        foreach ($iisService in @(Get-RelatedServices 'iis' @('W3SVC','WAS','IISADMIN') @('inetsrv'))) { $serviceRows.Add($iisService) | Out-Null; }; foreach ($iisLogPath in @('C:\\inetpub\\logs\\LogFiles','C:\\Windows\\System32\\LogFiles\\HTTPERR')) { $meta = Get-PathMetadata 'iis' $iisLogPath 'IIS log directory metadata'; if ($null -ne $meta) { $logRows.Add($meta) | Out-Null; } }
+        Write-Output '===PANELS==='; Convert-ToJsonArray -items $panelRows.ToArray() -depth 6; Write-Output '===ES_MATCHES==='; Convert-ToJsonArray -items $esMatches.ToArray() -depth 6; Write-Output '===SITES==='; Convert-ToJsonArray -items $siteRows.ToArray() -depth 6; Write-Output '===IIS_SITES==='; Convert-ToJsonArray -items $iisSites -depth 6; Write-Output '===SERVICES==='; Convert-ToJsonArray -items $serviceRows.ToArray() -depth 6; Write-Output '===LOGS==='; Convert-ToJsonArray -items $logRows.ToArray() -depth 6; Write-Output '===DIAGNOSTICS==='; Convert-ToJsonArray -items $diagnostics.ToArray() -depth 4;
+    `);
 }
 
 export const windowsLocalCommands: Record<string, string> = {
@@ -1531,6 +1681,7 @@ export const windowsLocalCommands: Record<string, string> = {
     browser: 'powershell -Command "echo ===CHROME===; Get-Item \\"$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\" -ErrorAction SilentlyContinue | Select-Object FullName,LastWriteTime; echo ===EDGE===; Get-Item \\"$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\" -ErrorAction SilentlyContinue | Select-Object FullName,LastWriteTime; echo ===FIREFOX===; Get-Item \\"$env:APPDATA\\Mozilla\\Firefox\\Profiles\\" -ErrorAction SilentlyContinue | Select-Object FullName,LastWriteTime"',
 };
 
+windowsLocalCommands.panel = buildWindowsPanelDetectionCommand();
 windowsLocalCommands.win_defender = `powershell.exe -NoProfile -Command "try { $status = Get-MpComputerStatus -ErrorAction Stop; $pref = $null; try { $pref = Get-MpPreference -ErrorAction SilentlyContinue } catch {}; [pscustomobject]@{ AntivirusEnabled=$status.AntivirusEnabled; AMServiceEnabled=$status.AMServiceEnabled; AntispywareEnabled=$status.AntispywareEnabled; BehaviorMonitorEnabled=$status.BehaviorMonitorEnabled; IoavProtectionEnabled=$status.IoavProtectionEnabled; OnAccessProtectionEnabled=$status.OnAccessProtectionEnabled; RealTimeProtectionEnabled=$status.RealTimeProtectionEnabled; NISEnabled=$status.NISEnabled; AntivirusSignatureLastUpdated=if ($status.AntivirusSignatureLastUpdated) { $status.AntivirusSignatureLastUpdated.ToString('yyyy-MM-dd HH:mm:ss') } else { '' }; AntivirusSignatureVersion=$status.AntivirusSignatureVersion; AntispywareSignatureLastUpdated=if ($status.AntispywareSignatureLastUpdated) { $status.AntispywareSignatureLastUpdated.ToString('yyyy-MM-dd HH:mm:ss') } else { '' }; AntispywareSignatureVersion=$status.AntispywareSignatureVersion; AMProductVersion=$status.AMProductVersion; AMEngineVersion=$status.AMEngineVersion; NISSignatureVersion=$status.NISSignatureVersion; QuickScanAge=$status.QuickScanAge; FullScanAge=$status.FullScanAge; ExclusionPath=if ($pref -and $pref.ExclusionPath) { @($pref.ExclusionPath) -join '; ' } else { '' }; ExclusionProcess=if ($pref -and $pref.ExclusionProcess) { @($pref.ExclusionProcess) -join '; ' } else { '' } } | ConvertTo-Json -Compress -Depth 4 } catch { [pscustomobject]@{ error=$_.Exception.Message } | ConvertTo-Json -Compress -Depth 4 }"`;
 
 windowsLocalCommands.persistence = `powershell.exe -NoProfile -Command "echo ===SCHEDULED_TASKS===; try { @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.State -ne 'Disabled' } | Select-Object -First 200 | ForEach-Object { $task = $_; $actions = @($task.Actions | ForEach-Object { $parts = @($_.Execute, $_.Arguments, $_.ClassId) | Where-Object { $_ }; if ($parts.Count -gt 0) { ($parts -join ' ').Trim() } else { ($_.ToString() -replace '\\s+', ' ').Trim() } }) -join '; '; $triggers = @($task.Triggers | ForEach-Object { $parts = @($_.CimClass.CimClassName, $_.StartBoundary, $_.EndBoundary, $_.Enabled) | Where-Object { $_ -ne $null -and $_ -ne '' }; if ($parts.Count -gt 0) { ($parts -join ' | ').Trim() } else { ($_.ToString() -replace '\\s+', ' ').Trim() } }) -join '; '; [pscustomobject]@{ TaskPath=$task.TaskPath; TaskName=$task.TaskName; State=[string]$task.State; Actions=$actions; Triggers=$triggers; Author=$task.Author; Description=$task.Description } }) | ConvertTo-Json -Compress -Depth 5 } catch { @([pscustomobject]@{ Error=$_.Exception.Message }) | ConvertTo-Json -Compress -Depth 5 }; echo ===SERVICES_AUTO===; @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object { $_.StartMode -eq 'Auto' } | Select-Object -First 200 | ForEach-Object { [pscustomobject]@{ Name=$_.Name; DisplayName=$_.DisplayName; Status=$_.State; StartType=$_.StartMode; PathName=$_.PathName; StartName=$_.StartName } }) | ConvertTo-Json -Compress -Depth 4; echo ===STARTUP_FOLDER===; @(Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue | Select-Object Name,Command,Location,User) | ConvertTo-Json -Compress -Depth 4"`;
@@ -1813,6 +1964,19 @@ export default function ModuleDetail({
     const [fullCollectionLoading, setFullCollectionLoading] = useState(false);
     const [fullCollectionProgress, setFullCollectionProgress] = useState(0);
     const [fullCollectionStage, setFullCollectionStage] = useState('');
+    const [iocSearchQuery, setIocSearchQuery] = useState('');
+    const [iocSearchPath, setIocSearchPath] = useState('');
+    const [iocSearchExtension, setIocSearchExtension] = useState('');
+    const [iocHashAlgorithm, setIocHashAlgorithm] = useState<EverythingHashAlgorithm>('md5');
+    const [iocHashValue, setIocHashValue] = useState('');
+    const [iocContentQuery, setIocContentQuery] = useState('');
+    const [iocSearchResults, setIocSearchResults] = useState<EverythingSearchResult[]>([]);
+    const [iocSearchPage, setIocSearchPage] = useState(1);
+    const [iocSearchTotalCount, setIocSearchTotalCount] = useState<number | null>(null);
+    const [iocSearchHasMore, setIocSearchHasMore] = useState(false);
+    const [iocSearchLoading, setIocSearchLoading] = useState(false);
+    const [iocSearchError, setIocSearchError] = useState<string | null>(null);
+    const iocSearchRequestSeq = useRef(0);
     const [dbSelectedDb, setDbSelectedDb] = useState<string>('');
     const [dbSelectedTable, setDbSelectedTable] = useState<string>('');
     const [dbTablesList, setDbTablesList] = useState<string[]>([]);
@@ -1947,6 +2111,47 @@ export default function ModuleDetail({
         }
     }, []);
 
+    const buildIocFileSearchRequest = useCallback((): EverythingSearchRequest | null => {
+        const nameQuery = iocSearchQuery.trim();
+        const extension = normalizeEverythingExtensionFilter(iocSearchExtension);
+        const hashValue = iocHashValue.trim();
+        const content = iocContentQuery.trim();
+        const path = iocSearchPath.trim();
+
+        if (content && !path) {
+            return null;
+        }
+
+        if (!isMeaningfulEverythingLiveQuery(nameQuery) && !extension && !hashValue && !content) {
+            return null;
+        }
+
+        const query = buildEverythingSearchQuery({
+            query: iocSearchQuery,
+            extension: iocSearchExtension,
+            hashAlgorithm: iocHashAlgorithm,
+            hashValue: iocHashValue,
+            content: iocContentQuery,
+        });
+
+        return {
+            query: query || '*',
+            path: path || undefined,
+            maxResults: EVERYTHING_LIVE_MAX_RESULTS,
+            offset: (Math.max(1, iocSearchPage) - 1) * EVERYTHING_LIVE_MAX_RESULTS,
+            filesOnly: true,
+            includeTotalCount: true,
+        };
+    }, [
+        iocContentQuery,
+        iocHashAlgorithm,
+        iocHashValue,
+        iocSearchPage,
+        iocSearchExtension,
+        iocSearchPath,
+        iocSearchQuery,
+    ]);
+
     const initTerminalPrompt = async () => {
         try {
             const [hostOut, pwdOut] = await Promise.all([
@@ -1974,6 +2179,66 @@ export default function ModuleDetail({
             setLoading(false);
         }
     }, [moduleKey, mode, timeRange]);
+
+    useEffect(() => {
+        if (moduleKey === 'ioc_file_search' && iocSearchPage !== 1) {
+            setIocSearchPage(1);
+        }
+    }, [
+        iocContentQuery,
+        iocHashAlgorithm,
+        iocHashValue,
+        iocSearchExtension,
+        iocSearchPath,
+        iocSearchQuery,
+        moduleKey,
+    ]);
+
+    useEffect(() => {
+        if (moduleKey !== 'ioc_file_search') return;
+
+        const request = buildIocFileSearchRequest();
+        const requestSeq = iocSearchRequestSeq.current + 1;
+        iocSearchRequestSeq.current = requestSeq;
+
+        if (!request) {
+            setIocSearchResults([]);
+            setIocSearchTotalCount(null);
+            setIocSearchHasMore(false);
+            setIocSearchLoading(false);
+            setIocSearchError(null);
+            setRawOutput('');
+            return;
+        }
+
+        setIocSearchLoading(true);
+        setIocSearchError(null);
+
+        const timer = window.setTimeout(() => {
+            searchEverythingFilesPage(request)
+                .then((response) => {
+                    if (iocSearchRequestSeq.current !== requestSeq) return;
+                    setIocSearchResults(response.results);
+                    setIocSearchTotalCount(typeof response.totalCount === 'number' ? response.totalCount : null);
+                    setIocSearchHasMore(response.hasMore);
+                    setRawOutput(JSON.stringify(response, null, 2));
+                })
+                .catch((error) => {
+                    if (iocSearchRequestSeq.current !== requestSeq) return;
+                    setIocSearchResults([]);
+                    setIocSearchTotalCount(null);
+                    setIocSearchHasMore(false);
+                    setIocSearchError(String(error));
+                })
+                .finally(() => {
+                    if (iocSearchRequestSeq.current === requestSeq) {
+                        setIocSearchLoading(false);
+                    }
+                });
+        }, EVERYTHING_SEARCH_DEBOUNCE_MS);
+
+        return () => window.clearTimeout(timer);
+    }, [buildIocFileSearchRequest, moduleKey]);
 
     const wrapCommand = (cmd: string): string => {
         if (mode !== 'remote') return cmd;
@@ -2037,7 +2302,7 @@ export default function ModuleDetail({
 
     const loadData = async (options: ModuleLoadOptions = {}) => {
         // 文件管理和终端模块有自己的加载逻辑
-        if (moduleKey === 'file_manager' || moduleKey === 'terminal') {
+        if (moduleKey === 'file_manager' || moduleKey === 'terminal' || moduleKey === 'ioc_file_search') {
             setLoading(false);
             return;
         }
@@ -6047,7 +6312,9 @@ export default function ModuleDetail({
             if (imageExts.includes(ext)) {
                 // 图片预览
                 setPreviewType('image');
-                const base64Cmd = `base64 "${file.fullPath}" 2>/dev/null`;
+                const base64Cmd = isWindowsLocalMode
+                    ? buildWindowsPreviewBase64Command(file.fullPath)
+                    : `base64 "${file.fullPath}" 2>/dev/null`;
                 const base64 = await executeRemoteCommand(base64Cmd);
                 setImageBase64(`data:image/${ext === 'svg' ? 'svg+xml' : ext};base64,${base64.trim()}`);
                 setFileContent(null);
@@ -6055,14 +6322,20 @@ export default function ModuleDetail({
             } else if (textExts.includes(ext)) {
                 // 文本预览
                 setPreviewType('text');
-                const content = await executeRemoteCommand(`cat "${file.fullPath}" 2>/dev/null`);
+                const command = isWindowsLocalMode
+                    ? buildWindowsPreviewTextCommand(file.fullPath)
+                    : `cat "${file.fullPath}" 2>/dev/null`;
+                const content = await executeRemoteCommand(command);
                 setFileContent(content);
                 setImageBase64(null);
                 setHexData([]);
             } else if (tableExts.includes(ext)) {
                 // 表格预览 (CSV/TSV)
                 setPreviewType('table');
-                const content = await executeRemoteCommand(`cat "${file.fullPath}" 2>/dev/null`);
+                const command = isWindowsLocalMode
+                    ? buildWindowsPreviewTextCommand(file.fullPath)
+                    : `cat "${file.fullPath}" 2>/dev/null`;
+                const content = await executeRemoteCommand(command);
                 setFileContent(content);
                 setImageBase64(null);
                 setHexData([]);
@@ -6070,7 +6343,9 @@ export default function ModuleDetail({
                 // 二进制/其他文件用 HexView
                 setPreviewType('hex');
                 // 获取文件前64KB的十六进制数据 (xxd 或 od 或 hexdump)
-                const hexCmd = `xxd -p "${file.fullPath}" 2>/dev/null | head -c 131072 || od -A n -t x1 "${file.fullPath}" 2>/dev/null | head -c 200000 | tr -d ' \\n' || hexdump -C "${file.fullPath}" 2>/dev/null | head -500 | awk '{for(i=2;i<=17;i++)printf $i}' | tr -d ' '`;
+                const hexCmd = isWindowsLocalMode
+                    ? buildWindowsPreviewHexCommand(file.fullPath)
+                    : `xxd -p "${file.fullPath}" 2>/dev/null | head -c 131072 || od -A n -t x1 "${file.fullPath}" 2>/dev/null | head -c 200000 | tr -d ' \\n' || hexdump -C "${file.fullPath}" 2>/dev/null | head -500 | awk '{for(i=2;i<=17;i++)printf $i}' | tr -d ' '`;
                 const hexStr = await executeRemoteCommand(hexCmd);
                 // 转换为字节数组
                 const bytes: number[] = [];
@@ -9432,6 +9707,180 @@ export default function ModuleDetail({
     };
 
     // 可疑文件扫描结果渲染
+    const renderIocFileSearch = () => {
+        const hasSearchCriteria = Boolean(buildIocFileSearchRequest());
+        const searchSurfaceBackground = isDarkMode ? '#101827' : '#ffffff';
+        const rowBorder = isDarkMode ? '#263244' : '#dde5ef';
+        const virtualTotal = iocSearchTotalCount
+            ?? ((Math.max(1, iocSearchPage) - 1) * EVERYTHING_LIVE_MAX_RESULTS
+                + iocSearchResults.length
+                + (iocSearchHasMore ? EVERYTHING_LIVE_MAX_RESULTS : 0));
+        const shouldShowPagination = hasSearchCriteria && virtualTotal > EVERYTHING_LIVE_MAX_RESULTS;
+        const advancedFilters = (
+            <div style={{ width: 340, display: 'grid', gap: 10 }}>
+                <Input
+                    aria-label="指定后缀"
+                    placeholder="php, aspx, ps1"
+                    value={iocSearchExtension}
+                    onChange={(event) => setIocSearchExtension(event.target.value)}
+                    allowClear
+                />
+                <Input
+                    aria-label="指定目录"
+                    placeholder="C:\\inetpub\\wwwroot"
+                    value={iocSearchPath}
+                    onChange={(event) => setIocSearchPath(event.target.value)}
+                    allowClear
+                />
+                <Space.Compact style={{ width: '100%' }}>
+                    <Select
+                        aria-label="哈希算法"
+                        value={iocHashAlgorithm}
+                        options={EVERYTHING_HASH_ALGORITHMS}
+                        onChange={(value: EverythingHashAlgorithm) => setIocHashAlgorithm(value)}
+                        style={{ width: 112 }}
+                    />
+                    <Input
+                        aria-label="哈希值"
+                        placeholder="hash equals"
+                        value={iocHashValue}
+                        onChange={(event) => setIocHashValue(event.target.value)}
+                        allowClear
+                    />
+                </Space.Compact>
+                <Input
+                    aria-label="文件内容"
+                    placeholder="content contains"
+                    value={iocContentQuery}
+                    onChange={(event) => setIocContentQuery(event.target.value)}
+                    allowClear
+                />
+            </div>
+        );
+
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <Space.Compact style={{ width: '100%' }}>
+                    <Input
+                        aria-label="Everything 实时搜索"
+                        type="search"
+                        size="large"
+                        prefix={<SearchOutlined />}
+                        placeholder="shell.php / *.ps1 / ext:aspx / dm:today"
+                        value={iocSearchQuery}
+                        onChange={(event) => setIocSearchQuery(event.target.value)}
+                        suffix={iocSearchLoading ? <Spin size="small" /> : null}
+                        allowClear
+                    />
+                    <Popover content={advancedFilters} trigger="click" placement="bottomRight">
+                        <Button size="large" aria-label="高级设置">
+                            ⚙️ 高级
+                        </Button>
+                    </Popover>
+                </Space.Compact>
+
+                {iocSearchError && (
+                    <Alert
+                        type="warning"
+                        showIcon
+                        title="Everything 搜索失败"
+                        description={iocSearchError}
+                    />
+                )}
+
+                {(hasSearchCriteria || iocSearchResults.length > 0 || iocSearchLoading) && (
+                    <div
+                        role="list"
+                        style={{
+                            overflow: 'hidden',
+                            border: `1px solid ${rowBorder}`,
+                            borderRadius: 8,
+                            background: searchSurfaceBackground,
+                        }}
+                    >
+                        {iocSearchResults.map((record) => {
+                            const name = record.name || getPathBaseName(record.fullPath);
+                            const extension = normalizeEverythingExtension(record);
+                            return (
+                                <div
+                                    role="listitem"
+                                    key={record.fullPath || name}
+                                    style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: 'minmax(0, 1fr) auto',
+                                        gap: 8,
+                                        alignItems: 'center',
+                                        padding: '8px 10px',
+                                        borderBottom: `1px solid ${rowBorder}`,
+                                    }}
+                                >
+                                    <div style={{ minWidth: 0 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                                            <Text strong ellipsis style={{ maxWidth: '42%' }}>{name}</Text>
+                                            {extension && <Tag style={{ marginInlineEnd: 0 }}>{extension}</Tag>}
+                                            <Text type="secondary" style={{ fontSize: 12 }}>
+                                                {typeof record.size === 'number' ? formatFileSize(record.size) : '-'}
+                                            </Text>
+                                            <Text type="secondary" style={{ fontSize: 12 }}>{formatEverythingDate(record.dateModified)}</Text>
+                                        </div>
+                                        <Text
+                                            copyable
+                                            type="secondary"
+                                            style={{ display: 'block', fontSize: 12, marginTop: 3 }}
+                                            ellipsis
+                                        >
+                                            {record.fullPath}
+                                        </Text>
+                                    </div>
+                                    <Button
+                                        type="text"
+                                        size="small"
+                                        aria-label={`查看 ${name}`}
+                                        icon={<EyeOutlined />}
+                                        onClick={() => openFilePreview({
+                                            name,
+                                            fullPath: record.fullPath,
+                                            isDir: false,
+                                        })}
+                                    />
+                                </div>
+                            );
+                        })}
+                        {hasSearchCriteria && !iocSearchLoading && iocSearchResults.length === 0 && (
+                            <div style={{ padding: 24 }}>
+                                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未搜索到文件" />
+                            </div>
+                        )}
+                        {shouldShowPagination && (
+                            <div
+                                role="navigation"
+                                aria-label="Everything search pagination"
+                                style={{
+                                    display: 'flex',
+                                    justifyContent: 'flex-end',
+                                    padding: '8px 10px',
+                                    borderTop: `1px solid ${rowBorder}`,
+                                }}
+                            >
+                                <Pagination
+                                    size="small"
+                                    current={iocSearchPage}
+                                    pageSize={EVERYTHING_LIVE_MAX_RESULTS}
+                                    total={virtualTotal}
+                                    showSizeChanger={false}
+                                    showQuickJumper
+                                    disabled={iocSearchLoading}
+                                    showTotal={(total) => iocSearchTotalCount === null ? `Page ${iocSearchPage}` : `${total} items`}
+                                    onChange={(page) => setIocSearchPage(page)}
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     const renderSuspiciousFiles = () => {
         if (!rawOutput) return <Text type="secondary">暂无数据</Text>;
 
@@ -10952,6 +11401,7 @@ export default function ModuleDetail({
         if (moduleKey === 'system_info' && mode === 'remote') {
             return remoteSystemInfo ? <RemoteSystemInfoView systemInfo={remoteSystemInfo} isDarkMode={isDarkMode} /> : <Spin tip="正在加载系统信息..." />;
         }
+        if (moduleKey === 'ioc_file_search') return <>{renderIocFileSearch()}</>;
         if (collectionDiagnostic) return renderCollectionDiagnostic();
         if (moduleKey === 'suspicious_files') return <>{renderSuspiciousFiles()}</>;
         if (moduleKey === 'webshell_scan') return <>{renderWebshellScan()}</>;

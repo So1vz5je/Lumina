@@ -469,7 +469,9 @@ describe('App authorization gate', () => {
       const view = container.querySelector('.analysis-module-view[data-module-key="ai_analysis"]');
       expect(view).toBeInTheDocument();
     });
-    expect(container.querySelector('.analysis-module-view[data-module-key="ai_analysis"] .ai-terminal-title')).toHaveTextContent('AI 分析');
+    const aiView = container.querySelector('.analysis-module-view[data-module-key="ai_analysis"]');
+    expect(aiView?.querySelector('.ai-terminal-workspace')).toBeInTheDocument();
+    expect(aiView?.querySelector('.ai-transcript')).toBeInTheDocument();
   });
 
   it('keeps the workbench back button clickable outside the titlebar drag layer', async () => {

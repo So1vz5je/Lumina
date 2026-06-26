@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Button, Checkbox, Progress, Typography, message } from 'antd';
 import {
   CheckCircleOutlined,
@@ -8,15 +8,29 @@ import {
 } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import type { AnalysisResult } from '../types/analysis';
+import type { ScanRunPayload } from '../types/analysis';
 import {
   createDefaultScanModules,
   type ScanModuleOption,
 } from '../modules/scan/catalog';
+import { normalizeScanRunPayload } from '../modules/scan/payload';
 
 const { Text, Title } = Typography;
 
+const highRiskModuleIds = new Set([
+  'panel',
+  'file_scan',
+  'process',
+  'network',
+  'startup',
+  'cron',
+  'persistence',
+  'security_events',
+  'security_posture',
+]);
+
 interface ScanProps {
-  onComplete: (results: AnalysisResult[]) => void;
+  onComplete: (payload: ScanRunPayload) => void;
 }
 
 export default function Scan({ onComplete }: ScanProps) {
@@ -25,13 +39,23 @@ export default function Scan({ onComplete }: ScanProps) {
   const [progress, setProgress] = useState(0);
   const [currentTask, setCurrentTask] = useState('准备就绪');
   const [activeGroup, setActiveGroup] = useState('all');
+  const activeRunIdRef = useRef(0);
 
   const selectedModuleIds = useMemo(
     () => modules.filter((module) => module.enabled).map((module) => module.id),
     [modules],
   );
   const selectedCount = selectedModuleIds.length;
-  const scanScopeText = '系统信息、用户痕迹、网络、进程、文件、持久化、应用、日志和容器';
+  const selectedHighRiskCount = selectedModuleIds.filter((id) => highRiskModuleIds.has(id)).length;
+  const selectedNonHighRiskCount = selectedCount - selectedHighRiskCount;
+  const scanStrategyLabel =
+    selectedCount === 0
+      ? '未选择'
+      : selectedHighRiskCount === highRiskModuleIds.size && selectedNonHighRiskCount === 0
+        ? '高危优先'
+        : selectedCount === modules.length
+          ? '完整取证'
+          : '自定义';
   const groupedModules = useMemo(() => {
     const groups = new Map<string, ScanModuleOption[]>();
 
@@ -72,31 +96,55 @@ export default function Scan({ onComplete }: ScanProps) {
     setModules((prev) => prev.map((module) => ({ ...module, enabled: false })));
   };
 
+  const selectHighRiskOnly = () => {
+    setActiveGroup('all');
+    setModules((prev) =>
+      prev.map((module) => ({
+        ...module,
+        enabled: highRiskModuleIds.has(module.id),
+      })),
+    );
+  };
+
+  const selectCompleteInvestigation = () => {
+    setActiveGroup('all');
+    selectAll();
+  };
+
   const startScan = async () => {
     if (selectedModuleIds.length === 0) {
       message.warning('请至少选择一个扫描模块');
       return;
     }
 
+    const modulesToScan = selectedModuleIds;
+    const runId = activeRunIdRef.current + 1;
+    activeRunIdRef.current = runId;
     setIsScanning(true);
     setProgress(8);
-    setCurrentTask(`正在执行 ${selectedModuleIds.length} 个扫描模块`);
+    setCurrentTask(`正在执行 ${modulesToScan.length} 个扫描模块`);
 
     try {
       setProgress(35);
-      const results = await invoke<AnalysisResult[]>('run_scan', {
-        selectedModules: selectedModuleIds,
+      const rawPayload = await invoke<AnalysisResult[] | ScanRunPayload>('run_scan', {
+        selectedModules: modulesToScan,
       });
-      const filteredResults = results.filter((result) =>
-        selectedModuleIds.includes(result.module_name),
-      );
+
+      if (activeRunIdRef.current !== runId) {
+        return;
+      }
+
+      const payload = normalizeScanRunPayload(rawPayload, modulesToScan);
 
       setProgress(100);
-      setCurrentTask(`扫描完成，共 ${filteredResults.length} 项结果`);
+      setCurrentTask(`扫描完成，共 ${payload.moduleResults.length} 项结果`);
       setIsScanning(false);
       message.success('扫描完成');
-      onComplete(filteredResults);
+      onComplete(payload);
     } catch (error) {
+      if (activeRunIdRef.current !== runId) {
+        return;
+      }
       console.error('Scan failed:', error);
       setIsScanning(false);
       setProgress(0);
@@ -106,9 +154,11 @@ export default function Scan({ onComplete }: ScanProps) {
   };
 
   const cancelScan = () => {
+    activeRunIdRef.current += 1;
     setIsScanning(false);
     setCurrentTask('扫描已停止');
     setProgress(0);
+    message.info('已停止接收本次扫描结果');
   };
 
   return (
@@ -117,10 +167,10 @@ export default function Scan({ onComplete }: ScanProps) {
         <div className="scan-hero-copy">
           <Text className="scan-eyebrow">快速扫描</Text>
           <Title level={3} className="scan-title">
-            应急响应快速扫描
+            高危优先快速扫描
           </Title>
           <Text className="scan-subtitle">
-            按模块批量采集本机应急响应证据，完成后进入统一结果视图。
+            快速定位 WebShell、外联进程、持久化和安全削弱证据。
           </Text>
         </div>
       </div>
@@ -139,19 +189,44 @@ export default function Scan({ onComplete }: ScanProps) {
           <strong>{groupedModules.length}</strong>
         </div>
         <div className="scan-status-item">
+          <span>扫描策略</span>
+          <strong>{scanStrategyLabel}</strong>
+        </div>
+        <div className="scan-status-item">
           <span>扫描状态</span>
           <strong>{scanStateLabel}</strong>
         </div>
       </div>
 
-      <section className="scan-scope-note" aria-label="扫描范围">
+      <section className="scan-risk-strip" aria-label="扫描策略">
         <div>
-          <Text className="scan-panel-kicker">扫描范围</Text>
-          <strong>{scanScopeText}</strong>
+          <Text className="scan-panel-kicker">扫描策略</Text>
+          <strong>{scanStrategyLabel}</strong>
+          <Text type="secondary">高危模块参与结果页高危归因。</Text>
         </div>
-        <Text type="secondary">
-          快速扫描会调用本机 Tauri 分析器采集所选模块证据；取消勾选的模块不会进入本次后端扫描。
-        </Text>
+        <div className="scan-risk-meter">
+          <Text>高危模块</Text>
+          <strong>{selectedHighRiskCount}/{highRiskModuleIds.size}</strong>
+        </div>
+        <div className="scan-risk-strategy-actions">
+          <Button
+            aria-label="高危优先一键选择"
+            disabled={isScanning}
+            onClick={selectHighRiskOnly}
+            size="small"
+            type="primary"
+          >
+            高危优先
+          </Button>
+          <Button
+            aria-label="完整取证全选"
+            disabled={isScanning}
+            onClick={selectCompleteInvestigation}
+            size="small"
+          >
+            完整取证
+          </Button>
+        </div>
       </section>
 
       <div className="scan-layout">
@@ -202,7 +277,7 @@ export default function Scan({ onComplete }: ScanProps) {
               {visibleModules.map((module) => (
                 <label
                   key={module.id}
-                  className={`scan-module-card ${module.enabled ? 'selected' : ''} ${isScanning ? 'disabled' : ''}`}
+                  className={`scan-module-card ${module.enabled ? 'selected' : ''} ${highRiskModuleIds.has(module.id) ? 'priority' : ''} ${isScanning ? 'disabled' : ''}`}
                 >
                   <Checkbox
                     checked={module.enabled}
@@ -212,7 +287,10 @@ export default function Scan({ onComplete }: ScanProps) {
                   <span className="scan-module-main">
                     <span className="scan-module-topline">
                       <Text className="scan-module-name">{module.label}</Text>
-                      <Text className="scan-module-group">{module.group}</Text>
+                      <span className="scan-module-badges">
+                        {highRiskModuleIds.has(module.id) ? <Text className="scan-module-priority">高危</Text> : null}
+                        <Text className="scan-module-group">{module.group}</Text>
+                      </span>
                     </span>
                     <Text className="scan-module-description">{module.description}</Text>
                   </span>
@@ -256,6 +334,7 @@ export default function Scan({ onComplete }: ScanProps) {
 
           {isScanning ? (
             <Button
+              aria-label="停止扫描"
               block
               danger
               icon={<StopOutlined />}
@@ -266,6 +345,7 @@ export default function Scan({ onComplete }: ScanProps) {
             </Button>
           ) : (
             <Button
+              aria-label="开始扫描"
               block
               disabled={selectedCount === 0}
               icon={<PlayCircleOutlined />}

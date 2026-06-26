@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe('Scan', () => {
-  it('passes the real run_scan results to onComplete', async () => {
+  it('passes the normalized run_scan payload to onComplete', async () => {
     const results = [
       {
         module_name: 'system_info',
@@ -52,12 +52,29 @@ describe('Scan', () => {
         details: { hostname: 'ws-01' },
       },
     ];
+    const riskFindings = [
+      {
+        id: 'backend-risk-1',
+        severity: 'high',
+        title: '后端高危发现',
+        reason: 'backend risk correlation',
+        confidence: 88,
+        affected: ['ws-01'],
+        evidence: [],
+        recommendedActions: ['复核证据'],
+      },
+    ];
+    const payload = {
+      moduleResults: results,
+      riskFindings,
+      diagnostics: ['backend scan completed'],
+    };
 
-    invokeMock.mockResolvedValue(results);
+    invokeMock.mockResolvedValue(payload);
 
     const onComplete = vi.fn();
 
-    render(<Scan onComplete={onComplete as () => void} />);
+    render(<Scan onComplete={onComplete as any} />);
 
     const buttons = screen.getAllByRole('button');
     fireEvent.click(buttons[buttons.length - 1]);
@@ -70,7 +87,44 @@ describe('Scan', () => {
         }),
       ),
     );
-    await waitFor(() => expect(onComplete).toHaveBeenCalledWith(results));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledWith(payload));
+  });
+
+  it('does not complete with stale results after stopping an in-flight scan', async () => {
+    let resolveScan: (value: unknown) => void = () => {};
+    invokeMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveScan = resolve;
+      }),
+    );
+    const onComplete = vi.fn();
+
+    render(<Scan onComplete={onComplete as any} />);
+
+    const startButtons = screen.getAllByRole('button');
+    fireEvent.click(startButtons[startButtons.length - 1]);
+    await waitFor(() => expect(screen.getByText('停止扫描')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('停止扫描'));
+    expect(screen.getByText('扫描已停止')).toBeInTheDocument();
+
+    resolveScan({
+      moduleResults: [
+        {
+          module_name: 'system_info',
+          status: 'ok',
+          summary: 'late result',
+          details: {},
+        },
+      ],
+      riskFindings: [],
+      diagnostics: [],
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByText('扫描已停止')).toBeInTheDocument();
   });
 
   it('renders the scan workspace shell and module catalog', () => {
@@ -78,15 +132,23 @@ describe('Scan', () => {
     const { container } = render(<Scan onComplete={onComplete as () => void} />);
 
     expect(container.querySelector('.scan-workspace')).toBeInTheDocument();
+    expect(container.querySelector('.scan-risk-strip')).toBeInTheDocument();
     expect(container.querySelector('.scan-status-strip')).toBeInTheDocument();
-    expect(container.querySelector('.scan-scope-note')).toBeInTheDocument();
+    expect(container.querySelector('.scan-scope-note')).not.toBeInTheDocument();
     expect(container.querySelector('.scan-group-filter-bar')).toBeInTheDocument();
     expect(container.querySelector('.scan-module-grid')).toBeInTheDocument();
+    expect(container.querySelector('.scan-risk-focus-grid')).not.toBeInTheDocument();
     expect(container.querySelector('.scan-module-group-section')).not.toBeInTheDocument();
     expect(container.querySelectorAll('.scan-module-card').length).toBe(13);
     expect(screen.getByText('快速扫描')).toBeInTheDocument();
-    expect(screen.getByText('扫描范围')).toBeInTheDocument();
-    expect(screen.getByText(/系统信息、用户痕迹、网络、进程、文件、持久化、应用、日志和容器/)).toBeInTheDocument();
+    expect(screen.getByText('高危优先快速扫描')).toBeInTheDocument();
+    expect(screen.queryByText('WebShell 落点')).not.toBeInTheDocument();
+    expect(screen.queryByText('进程外联')).not.toBeInTheDocument();
+    expect(screen.queryByText('持久化入口')).not.toBeInTheDocument();
+    expect(screen.queryByText('安全削弱')).not.toBeInTheDocument();
+    expect(screen.getAllByText('高危优先').length).toBeGreaterThan(0);
+    expect(screen.getByText('快速定位 WebShell、外联进程、持久化和安全削弱证据。')).toBeInTheDocument();
+    expect(screen.getAllByText(/高危归因/).length).toBeGreaterThan(0);
     expect(screen.getByText('扫描状态')).toBeInTheDocument();
     expect(screen.getByText('系统信息')).toBeInTheDocument();
     expect(screen.getByText('安全状态')).toBeInTheDocument();
@@ -104,6 +166,47 @@ describe('Scan', () => {
     expect(screen.getByText('计划任务')).toBeInTheDocument();
     expect(screen.getByText('持久化检测')).toBeInTheDocument();
     expect(screen.queryByText('系统信息')).not.toBeInTheDocument();
+  });
+
+  it('can switch the scan strategy to high-risk evidence only before starting', async () => {
+    invokeMock.mockResolvedValue({
+      moduleResults: [],
+      riskFindings: [],
+      diagnostics: [],
+    });
+    const onComplete = vi.fn();
+
+    render(<Scan onComplete={onComplete as () => void} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '高危优先一键选择' }));
+    fireEvent.click(screen.getByRole('button', { name: '开始扫描' }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        'run_scan',
+        expect.objectContaining({
+          selectedModules: expect.arrayContaining([
+            'panel',
+            'file_scan',
+            'process',
+            'network',
+            'startup',
+            'cron',
+            'persistence',
+            'security_events',
+            'security_posture',
+          ]),
+        }),
+      ),
+    );
+
+    const selectedModules = invokeMock.mock.calls[0][1].selectedModules;
+    expect(selectedModules).toHaveLength(9);
+    expect(selectedModules).not.toContain('database');
+    expect(selectedModules).not.toContain('docker');
+    expect(selectedModules).not.toContain('system_info');
+    expect(selectedModules).not.toContain('user_trace');
+    expect(onComplete).toHaveBeenCalled();
   });
 
   it('keeps implemented optional analyzers selected by default', async () => {
@@ -142,6 +245,11 @@ describe('Scan', () => {
     const buttons = screen.getAllByRole('button');
     fireEvent.click(buttons[buttons.length - 1]);
 
-    await waitFor(() => expect(onComplete).toHaveBeenCalledWith(results));
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+        moduleResults: results,
+        diagnostics: [],
+      })),
+    );
   });
 });

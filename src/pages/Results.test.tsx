@@ -72,7 +72,7 @@ describe('Results', () => {
     expect(container.querySelector('.scan-results-workspace')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-commandbar')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-scope-strip')).not.toBeInTheDocument();
-    expect(container.querySelector('.scan-results-priority-panel')).not.toBeInTheDocument();
+    expect(container.querySelector('.scan-risk-panel')).toBeInTheDocument();
     expect(container.querySelector('.scan-results-soc-shell')).toBeInTheDocument();
     expect(container.querySelector('.scan-module-rail')).not.toBeInTheDocument();
     expect(container.querySelector('.scan-module-strip')).toBeInTheDocument();
@@ -83,6 +83,95 @@ describe('Results', () => {
     expect(screen.getAllByText('处置').length).toBeGreaterThan(0);
     expect(screen.getAllByText('系统信息').length).toBeGreaterThan(0);
     expect(screen.getAllByText('安全事件').length).toBeGreaterThan(0);
+  });
+
+  it('puts risk findings before module details after a scan', () => {
+    const results = [
+      {
+        module_name: 'panel',
+        status: 'info',
+        summary: '检测到 phpStudy',
+        details: {
+          detected_installs: [
+            {
+              panel_type: 'phpstudy',
+              name: 'PhpStudy Pro',
+              path: 'D:\\ctf-tools\\phpstudy_pro\\COM',
+              site_root: 'D:\\ctf-tools\\phpstudy_pro\\WWW',
+              detected: true,
+            },
+          ],
+        },
+      },
+      {
+        module_name: 'file_scan',
+        status: 'warning',
+        summary: '发现可疑脚本',
+        details: {
+          findings: [
+            {
+              name: 'shell.php',
+              path: 'D:\\ctf-tools\\phpstudy_pro\\WWW\\upload\\shell.php',
+              suspicious: true,
+              reason: 'PHP code contains eval and base64_decode',
+              last_modified: '2026-06-26 14:12:03',
+            },
+          ],
+        },
+      },
+    ];
+
+    const { container } = render(<Results results={results} />);
+
+    expect(container.querySelector('.scan-risk-panel')).toBeInTheDocument();
+    expect(screen.getByText('高危发现')).toBeInTheDocument();
+    expect(screen.getByText('疑似 WebShell 文件')).toBeInTheDocument();
+    expect(screen.getByText('Critical')).toBeInTheDocument();
+    expect(screen.getAllByText(/D:\\ctf-tools\\phpstudy_pro\\WWW\\upload\\shell\.php/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/立即隔离该脚本文件/)).toBeInTheDocument();
+  });
+
+  it('renders backend risk findings when the scan payload provides them', () => {
+    const results = [
+      {
+        module_name: 'process',
+        status: 'warning',
+        summary: '发现可疑进程',
+        details: {
+          suspicious_list: [
+            {
+              pid: 4321,
+              name: 'powershell.exe',
+              suspicious_reason: 'EncodedCommand',
+            },
+          ],
+        },
+      },
+    ];
+    const riskFindings = [
+      {
+        id: 'backend-persistence-risk',
+        severity: 'high',
+        title: '后端关联高危发现',
+        reason: '后端规则已关联进程、网络和持久化证据。',
+        confidence: 91,
+        affected: ['powershell.exe'],
+        evidence: [
+          {
+            moduleName: 'process',
+            label: 'powershell.exe',
+            value: 'EncodedCommand',
+          },
+        ],
+        recommendedActions: ['优先隔离主机并导出进程证据'],
+      },
+    ];
+
+    render(<Results {...({ results, riskFindings } as any)} />);
+
+    expect(screen.getByText('后端关联高危发现')).toBeInTheDocument();
+    expect(screen.getByText('High')).toBeInTheDocument();
+    expect(screen.getByText(/优先隔离主机/)).toBeInTheDocument();
   });
 
   it('renders the refactored evidence dashboard and selected module focus', () => {
@@ -195,6 +284,27 @@ describe('Results', () => {
               bindings: '*:80:',
             },
           ],
+          services: [
+            {
+              source: 'phpstudy',
+              name: 'Apache2.4',
+              display_name: 'Apache2.4',
+              state: 'Running',
+              start_mode: 'Auto',
+              path: 'C:\\phpstudy_pro\\Extensions\\Apache\\bin\\httpd.exe',
+              pid: '1234',
+            },
+          ],
+          logs: [
+            {
+              source: 'phpstudy',
+              path: 'C:\\phpstudy_pro\\COM\\log\\phpstudy.log',
+              size: 2048,
+              last_modified: '2026-06-25 20:00:00',
+              note: 'phpStudy log',
+            },
+          ],
+          diagnostics: ['IIS WebAdministration module is unavailable'],
         },
       },
     ];
@@ -212,6 +322,9 @@ describe('Results', () => {
     expect(screen.getAllByText('信息').length).toBeGreaterThan(0);
     expect(screen.getByText('PhpStudy Pro')).toBeInTheDocument();
     expect(screen.getByText('Default Web Site')).toBeInTheDocument();
+    expect(screen.getByText('Apache2.4')).toBeInTheDocument();
+    expect(screen.getByText('C:\\phpstudy_pro\\COM\\log\\phpstudy.log')).toBeInTheDocument();
+    expect(screen.getByText('IIS WebAdministration module is unavailable')).toBeInTheDocument();
   });
 
   it('renders startup, database, security event, and file scan results as readable findings', async () => {
