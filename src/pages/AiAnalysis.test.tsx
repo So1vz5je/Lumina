@@ -52,10 +52,12 @@ describe('AiAnalysis workspace', () => {
       />,
     );
 
-    expect(await screen.findByText('AI 分析工作台')).toBeInTheDocument();
+    expect(await screen.findByText('AI 分析')).toBeInTheDocument();
     expect(container.querySelector('.ai-terminal-workspace')).toBeInTheDocument();
     expect(container.querySelector('.ai-transcript')).toBeInTheDocument();
     expect(container.querySelector('.ai-composer-line')).toBeInTheDocument();
+    expect(container.querySelector('.ai-empty-prompts')).toBeInTheDocument();
+    expect(container.querySelector('.ai-prompt-row')).not.toBeInTheDocument();
     expect(container.querySelector('.ai-side-panel')).not.toBeInTheDocument();
     expect(container.querySelector('.ai-context-line')).not.toBeInTheDocument();
     expect(container.querySelector('.ai-command-bar')).not.toBeInTheDocument();
@@ -75,7 +77,7 @@ describe('AiAnalysis workspace', () => {
       />,
     );
 
-    await screen.findByText('AI 分析工作台');
+    await screen.findByText('AI 分析');
     await act(async () => {
       eventMock.streamHandler?.({
         payload: {

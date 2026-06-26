@@ -469,7 +469,7 @@ describe('App authorization gate', () => {
       const view = container.querySelector('.analysis-module-view[data-module-key="ai_analysis"]');
       expect(view).toBeInTheDocument();
     });
-    expect(screen.getByText('AI 分析工作台')).toBeInTheDocument();
+    expect(container.querySelector('.analysis-module-view[data-module-key="ai_analysis"] .ai-terminal-title')).toHaveTextContent('AI 分析');
   });
 
   it('keeps the workbench back button clickable outside the titlebar drag layer', async () => {

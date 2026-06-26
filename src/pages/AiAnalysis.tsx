@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Input, Tooltip, Typography, message } from 'antd';
+import { Button, Input, Tooltip, message } from 'antd';
 import {
   PlusOutlined,
   SendOutlined,
@@ -8,8 +8,6 @@ import {
 } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import type { AnalysisResult } from '../types/analysis';
-
-const { Title } = Typography;
 
 type ChatRole = 'user' | 'assistant';
 
@@ -338,7 +336,7 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
       <main className="ai-terminal-main" aria-label="AI conversation">
         <header className="ai-terminal-head">
           <div className="ai-terminal-title">
-            <Title level={4}>AI 分析工作台</Title>
+            <span>AI 分析</span>
           </div>
           <div className="ai-terminal-actions">
             <span className={`ai-run-state ${running ? 'running' : ''}`}>{running ? '分析中' : '就绪'}</span>
@@ -353,19 +351,18 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
           </div>
         </header>
 
-        <div className="ai-prompt-row" aria-label="快捷提问">
-          {quickPrompts.map((item) => (
-            <button key={item.label} type="button" onClick={() => appendPrompt(item.prompt)}>
-              <ThunderboltOutlined />
-              {item.label}
-            </button>
-          ))}
-        </div>
-
         <div className="ai-transcript" ref={scrollRef}>
           {messages.length === 0 ? (
             <div className="ai-empty-state">
-              <Title level={3}>等待输入</Title>
+              <div className="ai-empty-copy">等待输入</div>
+              <div className="ai-empty-prompts" aria-label="建议问题">
+                {quickPrompts.map((item) => (
+                  <button key={item.label} type="button" onClick={() => appendPrompt(item.prompt)}>
+                    <ThunderboltOutlined />
+                    {item.label}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             messages.map((item) => (
