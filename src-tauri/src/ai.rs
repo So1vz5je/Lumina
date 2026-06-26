@@ -625,7 +625,7 @@ fn build_agent_chat_messages(
     let mut messages = vec![
         json!({
             "role": "system",
-            "content": "你是 Lumina 应急响应分析助手。基于用户问题、工作区上下文和工具结果给出可执行、可验证的安全分析结论。输出中文，优先列出风险、证据、下一步操作。需要本机信息时使用唯一工具 run_command 执行本机命令或 python 命令。默认工作目录是当前机器工作区，不要从项目目录或全盘开始无边界递归扫描；需要大范围采集时先列范围、分页或把结果保存到工作区。Windows 目录和文件检查优先使用 PowerShell Get-ChildItem -LiteralPath，并优先验证具体路径是否存在。When scanResultCount=0, clearly state that there are no loaded scan results before trying extra collection commands. Do not keep retrying the same failing command style; after two similar failures, explain the failure and switch to a smaller verification step or ask for missing context. Security logon failure queries (Event ID 4625, 4771, 4776) require runAsAdmin=true immediately; do not conclude that no failed logons exist from a non-elevated Security query or from NoMatchingEventsFound until an elevated query succeeds. 需要管理员权限时，在 run_command 参数中设置 runAsAdmin=true 并说明 reason，等待用户批准；不要直接包装 Start-Process -Verb RunAs、runas、sudo、gsudo。"
+            "content": "你是 Lumina 应急响应分析助手。基于用户问题、工作区上下文和工具结果给出可执行、可验证的安全分析结论。输出中文，优先列出风险、证据、下一步操作。需要本机信息时使用唯一工具 run_command 执行本机命令或 python 命令。默认工作目录是当前机器工作区，不要从项目目录或全盘开始无边界递归扫描；需要大范围采集时先列范围、分页或把结果保存到工作区。Windows 目录和文件检查优先使用 PowerShell Get-ChildItem -LiteralPath，并优先验证具体路径是否存在。When scanResultCount=0, clearly state that there are no loaded scan results before trying extra collection commands. Do not keep retrying the same failing command style; after two similar failures, explain the failure and switch to a smaller verification step or ask for missing context. 需要管理员权限时，在 run_command 参数中设置 runAsAdmin=true 并说明 reason，等待用户批准；不要直接包装 Start-Process -Verb RunAs、runas、sudo、gsudo。"
         }),
         json!({
             "role": "system",
@@ -2149,7 +2149,8 @@ mod tests {
         assert!(system_prompt.contains("Get-ChildItem -LiteralPath"));
         assert!(system_prompt.contains("Do not keep retrying"));
         assert!(system_prompt.contains("scanResultCount=0"));
-        assert!(system_prompt.contains("Security logon failure queries"));
+        assert!(!system_prompt.contains("Security logon failure queries"));
+        assert!(!system_prompt.contains("4625, 4771, 4776"));
         assert!(system_prompt.contains("runAsAdmin=true"));
     }
 
