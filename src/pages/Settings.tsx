@@ -150,7 +150,18 @@ export default function Settings({
   const handleTestAiConfig = async () => {
     setAiTesting(true);
     try {
-      const result = await invoke<{ success: boolean; message: string }>('ai_test_config');
+      const result = await invoke<{ success: boolean; message: string }>('ai_test_config', {
+        request: {
+          provider: aiConfig.provider,
+          baseUrl: aiConfig.baseUrl,
+          apiKey: aiApiKey,
+          model: aiConfig.model,
+          temperature: aiConfig.temperature,
+          maxTokens: aiConfig.maxTokens,
+          showReasoning: aiConfig.showReasoning,
+          toolsEnabled: aiConfig.toolsEnabled,
+        },
+      });
       if (result.success) {
         message.success(result.message);
       } else {

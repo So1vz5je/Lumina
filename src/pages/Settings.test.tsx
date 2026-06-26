@@ -58,6 +58,12 @@ describe('Settings authorization UI', () => {
           toolsEnabled: true,
         };
       }
+      if (command === 'ai_test_config') {
+        return {
+          success: true,
+          message: '模型连接成功',
+        };
+      }
       return {};
     });
 
@@ -131,6 +137,30 @@ describe('Settings authorization UI', () => {
         baseUrl: 'https://api.example.com/v1',
         apiKey: 'sk-test-key',
         model: 'qwen-plus',
+      }),
+    });
+  });
+
+  it('runs the backend model test request from the settings page', async () => {
+    render(<Settings {...props} />);
+
+    fireEvent.change(await screen.findByLabelText('Base URL'), {
+      target: { value: 'https://api.current-form.test/v1' },
+    });
+    fireEvent.change(screen.getByLabelText('API Key'), {
+      target: { value: 'sk-current-form-key' },
+    });
+    fireEvent.change(screen.getByLabelText('Model'), {
+      target: { value: 'qwen-current' },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /测试连接/ }));
+
+    expect(invokeMock).toHaveBeenCalledWith('ai_test_config', {
+      request: expect.objectContaining({
+        provider: 'openai-compatible',
+        baseUrl: 'https://api.current-form.test/v1',
+        apiKey: 'sk-current-form-key',
+        model: 'qwen-current',
       }),
     });
   });

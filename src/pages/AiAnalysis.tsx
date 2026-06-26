@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input, Tag, Tooltip, Typography, message } from 'antd';
+import { Button, Input, Tooltip, Typography, message } from 'antd';
 import {
-  ApiOutlined,
   BranchesOutlined,
-  BulbOutlined,
   MessageOutlined,
   PlusOutlined,
-  RobotOutlined,
   SendOutlined,
   ThunderboltOutlined,
   ToolOutlined,
@@ -210,36 +207,38 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
   };
 
   const assistantCount = messages.filter((item) => item.role === 'assistant').length;
+  const userCount = messages.filter((item) => item.role === 'user').length;
   const toolResultCount = toolEvents.filter((event) => event.type === 'tool_result').length;
 
   return (
-    <div className="ai-analysis-workspace">
-      <aside className="ai-session-rail" aria-label="AI sessions">
-        <div className="ai-brand-lockup">
-          <div className="ai-brand-mark">
-            <RobotOutlined />
-          </div>
-          <div>
+    <div className="ai-terminal-workspace">
+      <main className="ai-terminal-main" aria-label="AI conversation">
+        <header className="ai-terminal-head">
+          <div className="ai-terminal-title">
             <Text className="ai-kicker">Lumina Agent</Text>
             <Title level={4}>AI 分析工作台</Title>
           </div>
+          <div className="ai-terminal-actions">
+            <span className={`ai-run-state ${running ? 'running' : ''}`}>{running ? '分析中' : '就绪'}</span>
+            <Tooltip title="新建分析">
+              <Button
+                aria-label="新建分析"
+                disabled={running}
+                icon={<PlusOutlined />}
+                onClick={resetChat}
+              />
+            </Tooltip>
+          </div>
+        </header>
+
+        <div className="ai-context-line">
+          <span>{osType}</span>
+          <span>{mode}</span>
+          <span>{currentModule}</span>
+          <span>{scanResults.length} 条扫描结果</span>
         </div>
 
-        <button className="ai-session-item active" type="button">
-          <span className="ai-session-title">
-            <MessageOutlined />
-            当前会话
-          </span>
-          <span className="ai-session-meta">{messages.length || 0} 条消息</span>
-        </button>
-
-        <button className="ai-new-chat" disabled={running} onClick={resetChat} type="button">
-          <PlusOutlined />
-          新建分析
-        </button>
-
-        <div className="ai-quick-prompts">
-          <Text className="ai-section-label">快捷提问</Text>
+        <div className="ai-prompt-row" aria-label="快捷提问">
           {quickPrompts.map((item) => (
             <button key={item.label} type="button" onClick={() => appendPrompt(item.prompt)}>
               <ThunderboltOutlined />
@@ -247,47 +246,8 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
             </button>
           ))}
         </div>
-      </aside>
 
-      <main className="ai-chat-panel" aria-label="AI conversation">
-        <header className="ai-command-bar">
-          <div>
-            <Text className="ai-kicker">Agent</Text>
-            <Title level={4}>应急响应分析</Title>
-          </div>
-          <div className="ai-command-status">
-            <Tag icon={<ApiOutlined />} className="ai-status-tag">
-              OpenAI Compatible
-            </Tag>
-            <Tag icon={<ToolOutlined />} className="ai-status-tag">
-              工具调用
-            </Tag>
-            <Tag icon={<BulbOutlined />} className="ai-status-tag">
-              思考流
-            </Tag>
-          </div>
-        </header>
-
-        <header className="ai-run-strip">
-          <div>
-            <span>当前上下文</span>
-            <strong>{osType} / {mode}</strong>
-          </div>
-          <div>
-            <span>模块</span>
-            <strong>{currentModule}</strong>
-          </div>
-          <div>
-            <span>扫描结果</span>
-            <strong>{scanResults.length}</strong>
-          </div>
-          <div>
-            <span>工具结果</span>
-            <strong>{toolResultCount}</strong>
-          </div>
-        </header>
-
-        <div className="ai-message-list" ref={scrollRef}>
+        <div className="ai-transcript" ref={scrollRef}>
           {messages.length === 0 ? (
             <div className="ai-empty-state">
               <div className="ai-empty-mark">
@@ -298,10 +258,11 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
             </div>
           ) : (
             messages.map((item) => (
-              <article className={`ai-message ${item.role}`} key={item.id}>
-                <div className="ai-message-avatar">{item.role === 'user' ? '你' : 'AI'}</div>
+              <article className={`ai-line-message ${item.role}`} key={item.id}>
                 <div className="ai-message-body">
-                  <Text className="ai-message-role">{item.role === 'user' ? '你' : 'AI Agent'}</Text>
+                  <Text className="ai-message-role">
+                    {item.role === 'user' ? 'You' : 'Lumina Agent'}
+                  </Text>
                   {item.reasoning ? (
                     <details className="ai-reasoning" open>
                       <summary>思考过程</summary>
@@ -315,7 +276,8 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
           )}
         </div>
 
-        <div className="ai-composer">
+        <div className="ai-composer-line">
+          <span className="ai-composer-prompt">&gt;</span>
           <Input.TextArea
             rows={3}
             value={input}
@@ -341,55 +303,65 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
         </div>
       </main>
 
-      <aside className="ai-inspector-rail" aria-label="AI context inspector">
-        <section className="ai-inspector-section">
+      <aside className="ai-side-panel" aria-label="AI context inspector">
+        <section className="ai-side-section">
+          <Text className="ai-section-label">会话</Text>
+          <div className="ai-side-row">
+            <span><MessageOutlined /> 消息</span>
+            <strong>{messages.length}</strong>
+          </div>
+          <div className="ai-side-row">
+            <span>提问</span>
+            <strong>{userCount}</strong>
+          </div>
+          <div className="ai-side-row">
+            <span>回复</span>
+            <strong>{assistantCount}</strong>
+          </div>
+        </section>
+
+        <section className="ai-side-section">
           <Text className="ai-section-label">上下文</Text>
-          <div className="ai-context-grid">
+          <div className="ai-side-row">
             <span>系统</span>
             <strong>{osType}</strong>
+          </div>
+          <div className="ai-side-row">
             <span>模式</span>
             <strong>{mode}</strong>
+          </div>
+          <div className="ai-side-row">
             <span>模块</span>
             <strong>{currentModule}</strong>
-            <span>结果</span>
+          </div>
+          <div className="ai-side-row">
+            <span>扫描</span>
             <strong>{scanResults.length} 条</strong>
           </div>
         </section>
 
-        <section className="ai-inspector-section">
-          <Text className="ai-section-label">运行状态</Text>
-          <div className="ai-metric-row">
-            <div>
-              <strong>{assistantCount}</strong>
-              <span>回复</span>
-            </div>
-            <div>
-              <strong>{toolEvents.length}</strong>
-              <span>工具事件</span>
-            </div>
-          </div>
-        </section>
-
-        <section className="ai-inspector-section ai-tool-section">
+        <section className="ai-side-section ai-tool-section">
           <Text className="ai-section-label">工具轨迹</Text>
-        <div className="ai-tool-list">
-          {toolEvents.length === 0 ? (
-            <div className="ai-tool-empty">
-              <ToolOutlined />
-              <span>暂无工具调用</span>
-            </div>
-          ) : (
-            toolEvents.map((event) => (
-              <div className="ai-tool-event" key={event.id}>
-                <Tag className={event.type === 'tool_call' ? 'ai-tool-call' : 'ai-tool-result'}>
-                  {event.type === 'tool_call' ? '调用' : '结果'}
-                </Tag>
-                <strong>{event.name}</strong>
-                <p>{event.content}</p>
+          <div className="ai-side-row">
+            <span>结果</span>
+            <strong>{toolResultCount}</strong>
+          </div>
+          <div className="ai-tool-list">
+            {toolEvents.length === 0 ? (
+              <div className="ai-tool-empty">
+                <ToolOutlined />
+                <span>暂无工具调用</span>
               </div>
-            ))
-          )}
-        </div>
+            ) : (
+              toolEvents.map((event) => (
+                <div className={`ai-tool-event ${event.type}`} key={event.id}>
+                  <span>{event.type === 'tool_call' ? '调用' : '结果'}</span>
+                  <strong>{event.name}</strong>
+                  <p>{event.content}</p>
+                </div>
+              ))
+            )}
+          </div>
         </section>
       </aside>
     </div>
