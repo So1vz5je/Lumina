@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Button, Input, Tooltip, Typography, message } from 'antd';
 import {
-  BranchesOutlined,
-  MessageOutlined,
   PlusOutlined,
   SendOutlined,
   ThunderboltOutlined,
-  ToolOutlined,
 } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import type { AnalysisResult } from '../types/analysis';
 
-const { Text, Title, Paragraph } = Typography;
+const { Title } = Typography;
 
 type ChatRole = 'user' | 'assistant';
 
@@ -20,13 +18,6 @@ interface ChatMessage {
   role: ChatRole;
   content: string;
   reasoning?: string;
-}
-
-interface ToolEvent {
-  id: string;
-  type: string;
-  name: string;
-  content: string;
 }
 
 interface AiStreamEvent {
@@ -63,10 +54,156 @@ const quickPrompts = [
   },
 ];
 
+const isMarkdownBlockStart = (line: string) =>
+  /^#{1,6}\s+/.test(line)
+  || /^[-*]\s+/.test(line)
+  || /^\d+\.\s+/.test(line)
+  || /^>\s?/.test(line)
+  || /^```/.test(line);
+
+const renderInlineMarkdown = (text: string, keyPrefix: string): ReactNode[] => {
+  const nodes: ReactNode[] = [];
+  const tokenPattern = /(`[^`]+`|\*\*[^*]+?\*\*)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenPattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    const key = `${keyPrefix}-${match.index}`;
+    if (token.startsWith('`')) {
+      nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+    } else {
+      nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>);
+    }
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+  return nodes;
+};
+
+function MarkdownContent({ content }: { content: string }) {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    const fence = trimmed.match(/^```(\S*)\s*$/);
+    if (fence) {
+      const language = fence[1];
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith('```')) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(
+        <pre className="ai-markdown-codeblock" key={`code-${index}`}>
+          <code data-language={language || undefined}>{codeLines.join('\n')}</code>
+        </pre>,
+      );
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      const level = Math.min(heading[1].length + 2, 6);
+      const headingContent = renderInlineMarkdown(heading[2], `heading-${index}`);
+      if (level <= 3) {
+        blocks.push(<h3 className="ai-markdown-heading" key={`heading-${index}`}>{headingContent}</h3>);
+      } else if (level === 4) {
+        blocks.push(<h4 className="ai-markdown-heading" key={`heading-${index}`}>{headingContent}</h4>);
+      } else if (level === 5) {
+        blocks.push(<h5 className="ai-markdown-heading" key={`heading-${index}`}>{headingContent}</h5>);
+      } else {
+        blocks.push(<h6 className="ai-markdown-heading" key={`heading-${index}`}>{headingContent}</h6>);
+      }
+      index += 1;
+      continue;
+    }
+
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const item = lines[index].trim().match(/^[-*]\s+(.+)$/);
+        if (!item) break;
+        items.push(item[1]);
+        index += 1;
+      }
+      blocks.push(
+        <ul key={`ul-${index}`}>
+          {items.map((item, itemIndex) => (
+            <li key={`${itemIndex}-${item}`}>{renderInlineMarkdown(item, `ul-${index}-${itemIndex}`)}</li>
+          ))}
+        </ul>,
+      );
+      continue;
+    }
+
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const item = lines[index].trim().match(/^\d+\.\s+(.+)$/);
+        if (!item) break;
+        items.push(item[1]);
+        index += 1;
+      }
+      blocks.push(
+        <ol key={`ol-${index}`}>
+          {items.map((item, itemIndex) => (
+            <li key={`${itemIndex}-${item}`}>{renderInlineMarkdown(item, `ol-${index}-${itemIndex}`)}</li>
+          ))}
+        </ol>,
+      );
+      continue;
+    }
+
+    if (/^>\s?/.test(trimmed)) {
+      const quoteLines: string[] = [];
+      while (index < lines.length) {
+        const quote = lines[index].trim().match(/^>\s?(.*)$/);
+        if (!quote) break;
+        quoteLines.push(quote[1]);
+        index += 1;
+      }
+      blocks.push(
+        <blockquote key={`quote-${index}`}>
+          {renderInlineMarkdown(quoteLines.join('\n'), `quote-${index}`)}
+        </blockquote>,
+      );
+      continue;
+    }
+
+    const paragraphLines = [trimmed];
+    index += 1;
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index].trim())) {
+      paragraphLines.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push(
+      <p key={`p-${index}`}>{renderInlineMarkdown(paragraphLines.join(' '), `p-${index}`)}</p>,
+    );
+  }
+
+  return <div className="ai-markdown">{blocks}</div>;
+}
+
 export default function AiAnalysis({ mode, osType, currentModule, scanResults }: AiAnalysisProps) {
   const [sessionId] = useState(() => makeId());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [toolEvents, setToolEvents] = useState<ToolEvent[]>([]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -124,15 +261,6 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
           }
 
           if (payload.eventType === 'tool_call' || payload.eventType === 'tool_result') {
-            setToolEvents((current) => [
-              ...current,
-              {
-                id: makeId(),
-                type: payload.eventType,
-                name: payload.toolName || 'tool',
-                content: payload.content,
-              },
-            ]);
             return;
           }
 
@@ -167,7 +295,7 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
     } else {
       element.scrollTop = element.scrollHeight;
     }
-  }, [messages, toolEvents]);
+  }, [messages]);
 
   const sendMessage = async () => {
     const prompt = input.trim();
@@ -202,20 +330,14 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
   const resetChat = () => {
     if (running) return;
     setMessages([]);
-    setToolEvents([]);
     setInput('');
   };
-
-  const assistantCount = messages.filter((item) => item.role === 'assistant').length;
-  const userCount = messages.filter((item) => item.role === 'user').length;
-  const toolResultCount = toolEvents.filter((event) => event.type === 'tool_result').length;
 
   return (
     <div className="ai-terminal-workspace">
       <main className="ai-terminal-main" aria-label="AI conversation">
         <header className="ai-terminal-head">
           <div className="ai-terminal-title">
-            <Text className="ai-kicker">Lumina Agent</Text>
             <Title level={4}>AI 分析工作台</Title>
           </div>
           <div className="ai-terminal-actions">
@@ -231,13 +353,6 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
           </div>
         </header>
 
-        <div className="ai-context-line">
-          <span>{osType}</span>
-          <span>{mode}</span>
-          <span>{currentModule}</span>
-          <span>{scanResults.length} 条扫描结果</span>
-        </div>
-
         <div className="ai-prompt-row" aria-label="快捷提问">
           {quickPrompts.map((item) => (
             <button key={item.label} type="button" onClick={() => appendPrompt(item.prompt)}>
@@ -250,26 +365,19 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
         <div className="ai-transcript" ref={scrollRef}>
           {messages.length === 0 ? (
             <div className="ai-empty-state">
-              <div className="ai-empty-mark">
-                <BranchesOutlined />
-              </div>
-              <Title level={3}>等待分析线索</Title>
-              <Paragraph>选择左侧问题，或直接输入要研判的日志、进程、账号、文件路径。</Paragraph>
+              <Title level={3}>等待输入</Title>
             </div>
           ) : (
             messages.map((item) => (
               <article className={`ai-line-message ${item.role}`} key={item.id}>
                 <div className="ai-message-body">
-                  <Text className="ai-message-role">
-                    {item.role === 'user' ? 'You' : 'Lumina Agent'}
-                  </Text>
                   {item.reasoning ? (
-                    <details className="ai-reasoning" open>
-                      <summary>思考过程</summary>
-                      <Paragraph>{item.reasoning}</Paragraph>
+                    <details className="ai-reasoning">
+                      <summary>思考</summary>
+                      <MarkdownContent content={item.reasoning} />
                     </details>
                   ) : null}
-                  {item.content ? <Paragraph>{item.content}</Paragraph> : null}
+                  {item.content ? <MarkdownContent content={item.content} /> : null}
                 </div>
               </article>
             ))
@@ -302,68 +410,6 @@ export default function AiAnalysis({ mode, osType, currentModule, scanResults }:
           </Tooltip>
         </div>
       </main>
-
-      <aside className="ai-side-panel" aria-label="AI context inspector">
-        <section className="ai-side-section">
-          <Text className="ai-section-label">会话</Text>
-          <div className="ai-side-row">
-            <span><MessageOutlined /> 消息</span>
-            <strong>{messages.length}</strong>
-          </div>
-          <div className="ai-side-row">
-            <span>提问</span>
-            <strong>{userCount}</strong>
-          </div>
-          <div className="ai-side-row">
-            <span>回复</span>
-            <strong>{assistantCount}</strong>
-          </div>
-        </section>
-
-        <section className="ai-side-section">
-          <Text className="ai-section-label">上下文</Text>
-          <div className="ai-side-row">
-            <span>系统</span>
-            <strong>{osType}</strong>
-          </div>
-          <div className="ai-side-row">
-            <span>模式</span>
-            <strong>{mode}</strong>
-          </div>
-          <div className="ai-side-row">
-            <span>模块</span>
-            <strong>{currentModule}</strong>
-          </div>
-          <div className="ai-side-row">
-            <span>扫描</span>
-            <strong>{scanResults.length} 条</strong>
-          </div>
-        </section>
-
-        <section className="ai-side-section ai-tool-section">
-          <Text className="ai-section-label">工具轨迹</Text>
-          <div className="ai-side-row">
-            <span>结果</span>
-            <strong>{toolResultCount}</strong>
-          </div>
-          <div className="ai-tool-list">
-            {toolEvents.length === 0 ? (
-              <div className="ai-tool-empty">
-                <ToolOutlined />
-                <span>暂无工具调用</span>
-              </div>
-            ) : (
-              toolEvents.map((event) => (
-                <div className={`ai-tool-event ${event.type}`} key={event.id}>
-                  <span>{event.type === 'tool_call' ? '调用' : '结果'}</span>
-                  <strong>{event.name}</strong>
-                  <p>{event.content}</p>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-      </aside>
     </div>
   );
 }
