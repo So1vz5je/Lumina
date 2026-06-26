@@ -147,10 +147,13 @@ fn mask_api_key(api_key: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    if trimmed.len() <= 8 {
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= 8 {
         return "********".to_string();
     }
-    format!("{}******{}", &trimmed[..4], &trimmed[trimmed.len() - 4..])
+    let prefix: String = chars.iter().take(4).collect();
+    let suffix: String = chars[chars.len() - 4..].iter().collect();
+    format!("{}******{}", prefix, suffix)
 }
 
 fn ai_config_path() -> Result<PathBuf, String> {
@@ -647,6 +650,23 @@ mod tests {
 
         assert!(view.has_api_key);
         assert_eq!(view.api_key_preview, "sk-1******7890");
+    }
+
+    #[test]
+    fn config_view_masks_non_ascii_key_without_panicking() {
+        let view = config_to_view(AiConfig {
+            provider: "openai-compatible".to_string(),
+            base_url: "https://api.example.com/v1".to_string(),
+            api_key: "「帮我查一下今天的新闻」".to_string(),
+            model: "gpt-4.1-mini".to_string(),
+            temperature: 0.2,
+            max_tokens: 2048,
+            show_reasoning: true,
+            tools_enabled: true,
+        });
+
+        assert!(view.has_api_key);
+        assert_eq!(view.api_key_preview, "「帮我查******的新闻」");
     }
 
     #[test]
