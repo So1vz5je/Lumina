@@ -1262,6 +1262,35 @@ export const windowsLocalColumnTitles: Record<string, Record<string, string>> = 
     database: { source: '来源', name: '名称', type: '类型', status: '状态', port: '端口', pid: 'PID', version: '说明', path: '路径' },
 };
 
+const buildLinuxSuspiciousFilesCommand = (
+    suidDirs = '/usr /bin /sbin',
+    tempDirs = '/tmp /var/tmp /dev/shm',
+) => [
+    'echo "===SUID==="',
+    `timeout 20 find ${suidDirs} -perm -4000 -type f -print 2>/dev/null || true`,
+    'echo "===SGID==="',
+    `timeout 20 find ${suidDirs} -perm -2000 -type f -print 2>/dev/null || true`,
+    'echo "===WORLD_WRITABLE==="',
+    'timeout 15 find /etc /var/log -perm -0002 -type f -print 2>/dev/null || true',
+    'echo "===HIDDEN_EXE==="',
+    `timeout 15 find ${tempDirs} -name ".*" -type f -executable -print 2>/dev/null || true`,
+    'echo "===TEMP_EXE==="',
+    `timeout 15 find ${tempDirs} -type f -executable -print 2>/dev/null || true`,
+    'echo "===RECENT_MODIFIED==="',
+    'timeout 15 find /bin /sbin /usr/bin /usr/sbin -mtime -7 -type f -print 2>/dev/null || true',
+].join('; ');
+
+const buildLinuxWebshellScanCommand = (
+    webrootDirs = '/var/www /www',
+) => [
+    'echo "===PHP==="',
+    `timeout 25 grep -RIn --binary-files=without-match --include="*.php" -E "eval\\(|base64_decode\\(|system\\(|exec\\(|shell_exec\\(" ${webrootDirs} 2>/dev/null || true`,
+    'echo "===JSP==="',
+    `timeout 20 grep -RIn --binary-files=without-match --include="*.jsp" -E "ProcessBuilder|Runtime.getRuntime" ${webrootDirs} 2>/dev/null || true`,
+    'echo "===ASP==="',
+    `timeout 20 grep -RIn --binary-files=without-match --include="*.asp*" -E "execute|eval|WScript" ${webrootDirs} 2>/dev/null || true`,
+].join('; ');
+
 const remoteCommands: Record<string, string> = {
     process_list: 'ps aux --sort=-%cpu 2>/dev/null',
     service_list: 'echo "===SYSTEMD_SERVICES==="; systemctl list-units --type=service --all --no-pager --no-legend 2>/dev/null; echo "===SYSV_SERVICES==="; service --status-all 2>/dev/null || chkconfig --list 2>/dev/null',
@@ -1293,8 +1322,8 @@ const remoteCommands: Record<string, string> = {
     cron_log: 'grep -i cron /var/log/syslog 2>/dev/null || grep -i cron /var/log/messages 2>/dev/null || journalctl _COMM=cron -n 100 2>/dev/null',
     web_access_log: 'cat /var/log/nginx/access.log* 2>/dev/null || cat /var/log/apache2/access.log* 2>/dev/null || cat /var/log/httpd/access_log* 2>/dev/null || cat /www/wwwlogs/*.log 2>/dev/null',
     // 安全扫描命令
-    suspicious_files: `echo "===SUID===" && timeout 10 find /usr /bin /sbin -perm -4000 -type f 2>/dev/null | head -30 && echo "===SGID===" && timeout 10 find /usr /bin /sbin -perm -2000 -type f 2>/dev/null | head -30 && echo "===WORLD_WRITABLE===" && timeout 5 find /etc /var/log -perm -0002 -type f 2>/dev/null | head -20 && echo "===HIDDEN_EXE===" && find /tmp /var/tmp /dev/shm -name ".*" -type f -executable 2>/dev/null && echo "===TEMP_EXE===" && find /tmp /var/tmp /dev/shm -type f -executable 2>/dev/null | head -30 && echo "===RECENT_MODIFIED===" && find /bin /sbin /usr/bin /usr/sbin -mtime -7 -type f 2>/dev/null | head -20`,
-    webshell_scan: `echo "===PHP===" && timeout 15 grep -rn --include="*.php" -E "eval\\(|base64_decode\\(|system\\(|exec\\(|shell_exec\\(" /var/www /www 2>/dev/null | head -30 && echo "===JSP===" && timeout 10 grep -rn --include="*.jsp" -E "ProcessBuilder|Runtime.getRuntime" /var 2>/dev/null | head -20 && echo "===ASP===" && timeout 10 grep -rn --include="*.asp*" -E "execute|eval|WScript" /var/www /www /inetpub 2>/dev/null | head -20`,
+    suspicious_files: buildLinuxSuspiciousFilesCommand(),
+    webshell_scan: buildLinuxWebshellScanCommand(),
     // 用户痕迹分析命令
     sudo_log: 'grep -i sudo /var/log/auth.log 2>/dev/null || grep -i sudo /var/log/secure 2>/dev/null || journalctl _COMM=sudo -n 100 2>/dev/null',
     bashrc_check: 'echo "===ROOT===" && cat /root/.bashrc 2>/dev/null && echo "===USERS===" && cat /home/*/.bashrc 2>/dev/null',
@@ -2939,11 +2968,11 @@ export default function ModuleDetail({
 
         // 可疑文件扫描使用自定义目录
         if (currentKey === 'suspicious_files' && !(mode === 'local' && osType === 'Windows')) {
-            command = `echo "===SUID===" && timeout 10 find ${scanDirs.suid} -perm -4000 -type f 2>/dev/null | head -30 && echo "===SGID===" && timeout 10 find ${scanDirs.suid} -perm -2000 -type f 2>/dev/null | head -30 && echo "===WORLD_WRITABLE===" && timeout 5 find /etc /var/log -perm -0002 -type f 2>/dev/null | head -20 && echo "===HIDDEN_EXE===" && find ${scanDirs.temp} -name ".*" -type f -executable 2>/dev/null && echo "===TEMP_EXE===" && find ${scanDirs.temp} -type f -executable 2>/dev/null | head -30 && echo "===RECENT_MODIFIED===" && find /bin /sbin /usr/bin /usr/sbin -mtime -7 -type f 2>/dev/null | head -20`;
+            command = buildLinuxSuspiciousFilesCommand(scanDirs.suid, scanDirs.temp);
         }
         // Webshell扫描使用自定义目录
         if (currentKey === 'webshell_scan' && mode !== 'local') {
-            command = `echo "===PHP===" && timeout 15 grep -rn --include="*.php" -E "eval\\(|base64_decode\\(|system\\(|exec\\(|shell_exec\\(" ${scanDirs.webroot} 2>/dev/null | head -30 && echo "===JSP===" && timeout 10 grep -rn --include="*.jsp" -E "ProcessBuilder|Runtime.getRuntime" ${scanDirs.webroot} 2>/dev/null | head -20 && echo "===ASP===" && timeout 10 grep -rn --include="*.asp*" -E "execute|eval|WScript" ${scanDirs.webroot} 2>/dev/null | head -20`;
+            command = buildLinuxWebshellScanCommand(scanDirs.webroot);
         }
 
         // 日志时间过滤逻辑
