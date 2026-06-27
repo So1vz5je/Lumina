@@ -412,6 +412,63 @@ describe('App authorization gate', () => {
     expect(await screen.findByText('运行时间')).toBeInTheDocument();
   });
 
+  it('shows Linux log modules inside one log center page', async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown })[tauriInternals] = {};
+    localStorage.setItem(
+      'emergency_ssh_connections',
+      JSON.stringify([
+        {
+          id: 'demo-linux',
+          name: 'Demo Linux',
+          host: '10.0.0.5',
+          port: 22,
+          username: 'root',
+          authType: 'password',
+          password: 'demo',
+        },
+      ]),
+    );
+
+    invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
+      if (command === 'remote_connect') {
+        return {
+          id: 'conn-1',
+          name: 'Demo Linux',
+          host: '10.0.0.5',
+          port: 22,
+          username: 'root',
+          osType: 'Linux',
+          status: 'connected',
+        };
+      }
+
+      if (command === 'ssh_execute') {
+        const remoteCommand = args?.command || '';
+        const stdout = remoteCommand.includes('/var/log/auth.log') || remoteCommand.includes('journalctl -t sshd')
+          ? 'Jun 27 10:00:00 demo sshd[100]: Failed password for invalid user test from 203.0.113.5 port 55000 ssh2'
+          : '';
+        return { success: true, stdout, stderr: '' };
+      }
+
+      return [];
+    });
+
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByText('远程分析'));
+    fireEvent.click(await screen.findByRole('button', { name: /连接/ }));
+    fireEvent.click(await screen.findByText('日志中心'));
+
+    await waitFor(() => {
+      expect(container.querySelector('.analysis-module-view[data-module-key="linux_logs_workspace"]')).toBeInTheDocument();
+    });
+
+    expect(container.querySelector('.linux-module-workspace-page')).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: '认证日志' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '登录失败' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Sudo 日志' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Web 访问日志' })).toBeInTheDocument();
+  });
+
   it('uses the flush content layer for Windows local scan and results pages', async () => {
     Object.defineProperty(window.navigator, 'platform', {
       configurable: true,

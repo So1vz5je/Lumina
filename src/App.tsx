@@ -62,19 +62,19 @@ interface WorkspaceConfigView {
   exportsPath?: string;
 }
 
-interface WindowsWorkspaceModule {
+interface AnalysisWorkspaceModule {
   key: string;
   label: string;
 }
 
-interface WindowsModuleWorkspace {
+interface AnalysisModuleWorkspace {
   key: string;
   icon: ReactNode;
   label: string;
-  modules: WindowsWorkspaceModule[];
+  modules: AnalysisWorkspaceModule[];
 }
 
-const WINDOWS_MODULE_WORKSPACES: WindowsModuleWorkspace[] = [
+const WINDOWS_MODULE_WORKSPACES: AnalysisModuleWorkspace[] = [
   {
     key: 'windows_overview_workspace',
     icon: <DesktopOutlined />,
@@ -128,6 +128,7 @@ const WINDOWS_MODULE_WORKSPACES: WindowsModuleWorkspace[] = [
     icon: <FileTextOutlined />,
     label: '日志中心',
     modules: [
+      { key: 'windows_timeline', label: '调查时间线' },
       { key: 'security_events', label: '高价值安全事件' },
       { key: 'win_security_log', label: 'Security 日志' },
       { key: 'win_system_log', label: 'System 日志' },
@@ -173,24 +174,47 @@ const WINDOWS_MODULE_WORKSPACES: WindowsModuleWorkspace[] = [
   },
 ];
 
-function getWindowsWorkspace(moduleKey: string): WindowsModuleWorkspace | undefined {
+const LINUX_MODULE_WORKSPACES: AnalysisModuleWorkspace[] = [
+  {
+    key: 'linux_logs_workspace',
+    icon: <FileTextOutlined />,
+    label: '日志中心',
+    modules: [
+      { key: 'auth_log', label: '认证日志' },
+      { key: 'failed_logins', label: '登录失败' },
+      { key: 'login_history', label: '登录历史' },
+      { key: 'lastlog', label: '最后登录' },
+      { key: 'sudo_log', label: 'Sudo 日志' },
+      { key: 'cron_log', label: '定时任务日志' },
+      { key: 'syslog', label: '系统日志' },
+      { key: 'dmesg', label: '内核日志' },
+      { key: 'web_access_log', label: 'Web 访问日志' },
+    ],
+  },
+];
+
+function getWindowsWorkspace(moduleKey: string): AnalysisModuleWorkspace | undefined {
   return WINDOWS_MODULE_WORKSPACES.find((workspace) =>
     workspace.key === moduleKey || workspace.modules.some((module) => module.key === moduleKey),
   );
 }
 
-function getWindowsSelectedMenuKey(moduleKey: string): string {
-  return getWindowsWorkspace(moduleKey)?.key ?? moduleKey;
+function getLinuxWorkspace(moduleKey: string): AnalysisModuleWorkspace | undefined {
+  return LINUX_MODULE_WORKSPACES.find((workspace) =>
+    workspace.key === moduleKey || workspace.modules.some((module) => module.key === moduleKey),
+  );
 }
 
-function WindowsModuleWorkspaceView({
+function ModuleWorkspaceView({
   workspace,
   initialModuleKey,
   renderModule,
+  variant,
 }: {
-  workspace: WindowsModuleWorkspace;
+  workspace: AnalysisModuleWorkspace;
   initialModuleKey: string;
   renderModule: (moduleKey: string) => ReactNode;
+  variant: 'windows' | 'linux';
 }) {
   const initialActiveKey = workspace.modules.some((module) => module.key === initialModuleKey)
     ? initialModuleKey
@@ -202,9 +226,9 @@ function WindowsModuleWorkspaceView({
   }, [initialActiveKey, workspace.key]);
 
   return (
-    <div className="windows-module-workspace-page">
+    <div className={`${variant}-module-workspace-page`}>
       <Tabs
-        className="windows-module-workspace-tabs"
+        className={`${variant}-module-workspace-tabs`}
         activeKey={activeModuleKey}
         onChange={setActiveModuleKey}
         size="small"
@@ -572,19 +596,11 @@ const buildLinuxMenuItems = (mode: AnalysisMode): MenuItem[] => {
         { key: 'recent_files', icon: <ClockCircleOutlined />, label: '最近文件' },
       ],
     },
-    {
-      key: 'linux_logs_group',
-      icon: <FileTextOutlined />,
-      label: '日志分析',
-      children: [
-        { key: 'auth_log', icon: <FileTextOutlined />, label: '认证日志' },
-        { key: 'syslog', icon: <FileTextOutlined />, label: '系统日志' },
-        { key: 'dmesg', icon: <BugOutlined />, label: '内核日志' },
-        { key: 'failed_logins', icon: <AlertOutlined />, label: '登录失败' },
-        { key: 'cron_log', icon: <ClockCircleOutlined />, label: '定时任务日志' },
-        { key: 'web_access_log', icon: <GlobalOutlined />, label: 'Web 访问日志' },
-      ],
-    },
+    ...LINUX_MODULE_WORKSPACES.map((workspace) => ({
+      key: workspace.key,
+      icon: workspace.icon,
+      label: workspace.label,
+    })),
   );
 
   if (mode === 'remote') {
@@ -726,7 +742,11 @@ function App() {
   const activeWindowsWorkspace = isWindowsLocalModuleContent
     ? getWindowsWorkspace(currentModule)
     : undefined;
-  const selectedAnalysisMenuKey = activeWindowsWorkspace?.key ?? currentModule;
+  const activeLinuxWorkspace =
+    mode === 'remote' && osType === 'Linux'
+      ? getLinuxWorkspace(currentModule)
+      : undefined;
+  const selectedAnalysisMenuKey = activeWindowsWorkspace?.key ?? activeLinuxWorkspace?.key ?? currentModule;
   const isLinuxRemoteModuleContent =
     mode === 'remote' &&
     osType === 'Linux' &&
@@ -878,10 +898,20 @@ function App() {
             </div>
           ) : activeWindowsWorkspace ? (
             <div key={activeWindowsWorkspace.key} className="analysis-module-view analysis-module-enter" data-module-key={activeWindowsWorkspace.key}>
-              <WindowsModuleWorkspaceView
+              <ModuleWorkspaceView
                 workspace={activeWindowsWorkspace}
                 initialModuleKey={currentModule}
                 renderModule={(moduleKey) => renderModuleDetail(moduleKey, true)}
+                variant="windows"
+              />
+            </div>
+          ) : activeLinuxWorkspace ? (
+            <div key={activeLinuxWorkspace.key} className="analysis-module-view analysis-module-enter" data-module-key={activeLinuxWorkspace.key}>
+              <ModuleWorkspaceView
+                workspace={activeLinuxWorkspace}
+                initialModuleKey={currentModule}
+                renderModule={(moduleKey) => renderModuleDetail(moduleKey, true)}
+                variant="linux"
               />
             </div>
           ) : (

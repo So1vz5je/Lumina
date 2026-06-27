@@ -110,6 +110,7 @@ beforeAll(() => {
 beforeEach(() => {
   (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
   delete (window as Window & { __luminaRemoteTerminalSession?: unknown }).__luminaRemoteTerminalSession;
+  delete (window as Window & { __luminaRemoteTerminalOpenPromise?: unknown }).__luminaRemoteTerminalOpenPromise;
   invokeMock.mockReset();
   listenMock.mockReset();
   listenMock.mockImplementation(async () => vi.fn());
@@ -118,6 +119,7 @@ beforeEach(() => {
 afterEach(() => {
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   delete (window as Window & { __luminaRemoteTerminalSession?: unknown }).__luminaRemoteTerminalSession;
+  delete (window as Window & { __luminaRemoteTerminalOpenPromise?: unknown }).__luminaRemoteTerminalOpenPromise;
 });
 
 function renderRemoteModule(moduleKey: string, stdout: string, options: { isDarkMode?: boolean } = {}) {
@@ -692,6 +694,75 @@ describe('ModuleDetail Linux remote module rendering', () => {
     expect(closeCalls).toHaveLength(0);
   });
 
+  it('reuses the pending interactive terminal open while switching away and back', async () => {
+    let resolveOpen: ((session: { id: string; connectionId: string; title: string; cwd: string }) => void) | undefined;
+    const openPromise = new Promise<{ id: string; connectionId: string; title: string; cwd: string }>((resolve) => {
+      resolveOpen = resolve;
+    });
+
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'remote_open_active_terminal_session') {
+        return openPromise;
+      }
+      if (command === 'remote_close_terminal_session') return Promise.resolve(null);
+
+      return Promise.reject(new Error(`Unexpected command: ${command}`));
+    });
+
+    const firstRender = render(
+      <ModuleDetail
+        moduleKey="terminal"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('remote_open_active_terminal_session', {
+        title: 'analysis-shell',
+        cols: 120,
+        rows: 48,
+      });
+    });
+
+    firstRender.unmount();
+
+    render(
+      <ModuleDetail
+        moduleKey="terminal"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => expect(listenMock).toHaveBeenCalledTimes(6));
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'remote_open_active_terminal_session')).toHaveLength(1);
+
+    resolveOpen?.({
+      id: 'term-1',
+      connectionId: 'conn-1',
+      title: 'analysis-shell',
+      cwd: '~',
+    });
+
+    await waitFor(() => {
+      expect((window as Window & { __luminaRemoteTerminalSession?: unknown }).__luminaRemoteTerminalSession).toEqual(
+        expect.objectContaining({ id: 'term-1' }),
+      );
+    });
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'remote_close_terminal_session')).toHaveLength(0);
+  });
+
   it('keeps the remote Linux file manager inside a dark themed surface', async () => {
     invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
       if (command === 'ssh_execute') {
@@ -760,8 +831,10 @@ describe('ModuleDetail Linux remote module rendering', () => {
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('remote_open_active_terminal_session', expect.anything()));
     expect(container.querySelector('.linux-module-shell')).toBeInTheDocument();
-    expect(container.querySelector('.linux-module-header')).toBeInTheDocument();
+    expect(container.querySelector('.linux-terminal-topbar')).toBeInTheDocument();
+    expect(container.querySelector('.linux-terminal-status-connected')).toBeInTheDocument();
     expect(container.querySelector('.linux-module-body')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '清除' })).toBeInTheDocument();
   });
 
   it('renders terminal stream control sequences instead of exposing raw ANSI text', async () => {
@@ -855,7 +928,7 @@ describe('ModuleDetail Linux remote module rendering', () => {
   });
 
   it('renders MySQL database inventory, users, and tab-separated datadir output', async () => {
-    renderRemoteModule(
+    const { container } = renderRemoteModule(
       'database',
       [
         '===MYSQL_VERSION===',
@@ -877,6 +950,11 @@ describe('ModuleDetail Linux remote module rendering', () => {
     );
 
     await waitFor(() => {
+      expect(container.querySelector('.linux-database-workbench')).toBeInTheDocument();
+      expect(container.querySelector('.linux-database-commandbar')).toBeInTheDocument();
+      expect(container.querySelector('.linux-database-engine-grid')).toBeInTheDocument();
+      expect(container.querySelector('.linux-database-tabs')).toBeInTheDocument();
+      expect(container.querySelector('.linux-database-table')).toBeInTheDocument();
       expect(screen.getByText(/mysql\s+Ver 8\.0\.36 for Linux on x86_64/)).toBeInTheDocument();
       expect(screen.getByText('/var/lib/mysql/')).toBeInTheDocument();
       expect(screen.getByText('appdb')).toBeInTheDocument();
@@ -1392,7 +1470,7 @@ describe('ModuleDetail Linux remote module rendering', () => {
   });
 
   it('structures suspicious file scan output with category, risk, directory, and file name', async () => {
-    renderRemoteModule(
+    const { container } = renderRemoteModule(
       'suspicious_files',
       [
         '===SUID===',
@@ -1405,6 +1483,11 @@ describe('ModuleDetail Linux remote module rendering', () => {
     );
 
     await waitFor(() => {
+      expect(container.querySelector('.linux-evidence-scan')).toBeInTheDocument();
+      expect(container.querySelector('.linux-evidence-scan-commandbar')).toBeInTheDocument();
+      expect(container.querySelector('.linux-evidence-scan-controls')).toBeInTheDocument();
+      expect(container.querySelector('.linux-evidence-scan-table')).toBeInTheDocument();
+      expect(container.querySelector('.linux-evidence-section-list')).toBeInTheDocument();
       expect(screen.getAllByText('SUID/SGID提权风险').length).toBeGreaterThan(0);
       expect(screen.getAllByText('临时目录可执行文件').length).toBeGreaterThan(0);
       expect(screen.getAllByText('全局可写文件').length).toBeGreaterThan(0);
@@ -1417,7 +1500,7 @@ describe('ModuleDetail Linux remote module rendering', () => {
   });
 
   it('structures webshell scan hits with language, rule, risk, and evidence snippet', async () => {
-    renderRemoteModule(
+    const { container } = renderRemoteModule(
       'webshell_scan',
       [
         '===PHP===',
@@ -1428,6 +1511,11 @@ describe('ModuleDetail Linux remote module rendering', () => {
     );
 
     await waitFor(() => {
+      expect(container.querySelector('.linux-evidence-scan')).toBeInTheDocument();
+      expect(container.querySelector('.linux-evidence-scan-commandbar')).toBeInTheDocument();
+      expect(container.querySelector('.linux-evidence-scan-controls')).toBeInTheDocument();
+      expect(container.querySelector('.linux-evidence-scan-table')).toBeInTheDocument();
+      expect(container.querySelector('.linux-evidence-section-list')).toBeInTheDocument();
       expect(screen.getByText('Webshell命中明细')).toBeInTheDocument();
       expect(screen.getAllByText('PHP').length).toBeGreaterThan(0);
       expect(screen.getAllByText('JSP').length).toBeGreaterThan(0);

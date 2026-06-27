@@ -2564,6 +2564,77 @@ body {
   min-height: 0;
 }
 
+.analysis-workbench .linux-module-workspace-page {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #edf4f2;
+}
+
+.analysis-workbench.dark .linux-module-workspace-page {
+  background: #071012;
+}
+
+.analysis-workbench .linux-module-workspace-tabs {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.analysis-workbench .linux-module-workspace-tabs > .ant-tabs-nav {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid rgba(20, 83, 45, 0.10);
+  background: #edf4f2;
+}
+
+.analysis-workbench.dark .linux-module-workspace-tabs > .ant-tabs-nav {
+  border-bottom-color: rgba(94, 234, 212, 0.10);
+  background: #071012;
+}
+
+.analysis-workbench .linux-module-workspace-tabs .ant-tabs-tab {
+  padding: 8px 10px;
+  color: #365c51;
+  font-size: 13px;
+}
+
+.analysis-workbench.dark .linux-module-workspace-tabs .ant-tabs-tab {
+  color: #9fb5ae;
+}
+
+.analysis-workbench .linux-module-workspace-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #0f766e !important;
+  font-weight: 700;
+}
+
+.analysis-workbench.dark .linux-module-workspace-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #5eead4 !important;
+}
+
+.analysis-workbench .linux-module-workspace-tabs .ant-tabs-ink-bar {
+  background: #0f766e;
+}
+
+.analysis-workbench.dark .linux-module-workspace-tabs .ant-tabs-ink-bar {
+  background: #5eead4;
+}
+
+.analysis-workbench .linux-module-workspace-tabs .ant-tabs-content-holder {
+  min-height: 0;
+  flex: 1 1 auto;
+  padding-top: 12px;
+}
+
+.analysis-workbench .linux-module-workspace-tabs .ant-tabs-content,
+.analysis-workbench .linux-module-workspace-tabs .ant-tabs-tabpane {
+  height: 100%;
+  min-height: 0;
+}
+
 .analysis-workbench .analysis-module-enter {
   animation: moduleViewEnter 0.18s cubic-bezier(0.2, 0, 0.2, 1) both;
 }
@@ -3474,7 +3545,10 @@ body {
 
 .analysis-workbench .linux-terminal-shell,
 .analysis-workbench .linux-terminal-workspace {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
+  height: 100%;
   min-height: 0;
   background: #edf4f2 !important;
 }
@@ -3484,13 +3558,112 @@ body {
   background: #071012 !important;
 }
 
+.analysis-workbench .linux-terminal-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 20px;
+  border-bottom: 1px solid rgba(20, 83, 45, 0.12);
+  background: #edf4f2;
+}
+
+.analysis-workbench.dark .linux-terminal-topbar {
+  border-bottom-color: rgba(94, 234, 212, 0.1);
+  background: #071012;
+}
+
+.analysis-workbench .linux-terminal-identity {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  color: #16312b;
+  font-size: 13px;
+}
+
+.analysis-workbench.dark .linux-terminal-identity {
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-terminal-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #94a3b8;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.12);
+}
+
+.analysis-workbench .linux-terminal-dot-connected {
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+}
+
+.analysis-workbench .linux-terminal-name {
+  overflow: hidden;
+  color: inherit;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-workbench .linux-terminal-status,
+.analysis-workbench .linux-terminal-privilege {
+  padding: 1px 7px;
+  border: 1px solid rgba(20, 83, 45, 0.12);
+  border-radius: 999px;
+  background: rgba(248, 252, 250, 0.7);
+  color: #4b635c;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.analysis-workbench .linux-terminal-status-connected {
+  border-color: rgba(16, 185, 129, 0.22);
+  background: rgba(16, 185, 129, 0.08);
+  color: #047857;
+}
+
+.analysis-workbench.dark .linux-terminal-status,
+.analysis-workbench.dark .linux-terminal-privilege {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: rgba(94, 234, 212, 0.06);
+  color: #b6d8d1;
+}
+
+.analysis-workbench.dark .linux-terminal-status-connected {
+  border-color: rgba(52, 211, 153, 0.22);
+  background: rgba(52, 211, 153, 0.08);
+  color: #86efac;
+}
+
+.analysis-workbench .linux-terminal-action.ant-btn {
+  color: #45665d;
+}
+
+.analysis-workbench .linux-terminal-action.ant-btn:hover {
+  background: rgba(15, 118, 110, 0.08) !important;
+  color: #0f766e !important;
+}
+
+.analysis-workbench.dark .linux-terminal-action.ant-btn {
+  color: #a9c9c2;
+}
+
+.analysis-workbench.dark .linux-terminal-action.ant-btn:hover {
+  background: rgba(94, 234, 212, 0.08) !important;
+  color: #5eead4 !important;
+}
+
 .analysis-workbench .linux-terminal-body {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-  padding: 0 20px 20px !important;
+  padding: 8px 20px 20px !important;
   background: #edf4f2 !important;
 }
 
@@ -3503,6 +3676,7 @@ body {
   height: 100% !important;
   min-height: 0;
   border-radius: 6px !important;
+  padding: 14px !important;
 }
 
 .analysis-workbench .linux-remote-terminal-light {
@@ -3745,6 +3919,606 @@ body {
 .analysis-workbench.dark .linux-config-pre {
   background: #071012;
   color: #d8e8e2;
+}
+
+.analysis-workbench .linux-evidence-scan {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: #16312b;
+}
+
+.analysis-workbench.dark .linux-evidence-scan {
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-evidence-scan-commandbar,
+.analysis-workbench .linux-evidence-scan-controls,
+.analysis-workbench .linux-evidence-scan-table,
+.analysis-workbench .linux-evidence-section,
+.analysis-workbench .linux-evidence-empty,
+.analysis-workbench .linux-evidence-scan-loading,
+.analysis-workbench .linux-evidence-scan-summary {
+  border: 1px solid rgba(20, 83, 45, 0.12);
+  border-radius: 6px;
+  background: #f8fcfa;
+}
+
+.analysis-workbench.dark .linux-evidence-scan-commandbar,
+.analysis-workbench.dark .linux-evidence-scan-controls,
+.analysis-workbench.dark .linux-evidence-scan-table,
+.analysis-workbench.dark .linux-evidence-section,
+.analysis-workbench.dark .linux-evidence-empty,
+.analysis-workbench.dark .linux-evidence-scan-loading,
+.analysis-workbench.dark .linux-evidence-scan-summary {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: #0b1518;
+}
+
+.analysis-workbench .linux-evidence-scan-commandbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+}
+
+.analysis-workbench .linux-evidence-scan-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.analysis-workbench .linux-evidence-kicker {
+  color: #60756f;
+  font-size: 12px;
+}
+
+.analysis-workbench.dark .linux-evidence-kicker {
+  color: #8aa39b;
+}
+
+.analysis-workbench .linux-evidence-heading {
+  color: #103127;
+  font-size: 15px;
+}
+
+.analysis-workbench.dark .linux-evidence-heading {
+  color: #ecfdf5;
+}
+
+.analysis-workbench .linux-evidence-scan-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.analysis-workbench .linux-evidence-count {
+  padding: 1px 8px;
+  border: 1px solid rgba(20, 83, 45, 0.12);
+  border-radius: 999px;
+  background: #eef7f3;
+  color: #45665d;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.analysis-workbench .linux-evidence-count-risk {
+  border-color: rgba(220, 38, 38, 0.2);
+  background: rgba(254, 226, 226, 0.75);
+  color: #b91c1c;
+}
+
+.analysis-workbench.dark .linux-evidence-count {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: rgba(94, 234, 212, 0.06);
+  color: #b6d8d1;
+}
+
+.analysis-workbench.dark .linux-evidence-count-risk {
+  border-color: rgba(248, 113, 113, 0.22);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fca5a5;
+}
+
+.analysis-workbench .linux-evidence-scan-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.analysis-workbench .linux-evidence-scan-controls-single {
+  grid-template-columns: minmax(260px, 520px);
+}
+
+.analysis-workbench .linux-evidence-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: #4b635c;
+  font-size: 12px;
+}
+
+.analysis-workbench.dark .linux-evidence-field {
+  color: #a9c9c2;
+}
+
+.analysis-workbench .linux-evidence-field .ant-input {
+  border-color: rgba(20, 83, 45, 0.14);
+  background: #ffffff;
+  color: #16312b;
+}
+
+.analysis-workbench.dark .linux-evidence-field .ant-input {
+  border-color: rgba(94, 234, 212, 0.14);
+  background: #071012;
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-evidence-scan-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+}
+
+.analysis-workbench .linux-evidence-scan-summary {
+  padding: 9px 12px;
+}
+
+.analysis-workbench .linux-evidence-summary-risk,
+.analysis-workbench .linux-evidence-summary-ok {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.analysis-workbench .linux-evidence-summary-risk {
+  color: #b91c1c;
+}
+
+.analysis-workbench .linux-evidence-summary-ok {
+  color: #047857;
+}
+
+.analysis-workbench.dark .linux-evidence-summary-risk {
+  color: #fca5a5;
+}
+
+.analysis-workbench.dark .linux-evidence-summary-ok {
+  color: #86efac;
+}
+
+.analysis-workbench .linux-evidence-scan-table {
+  overflow: hidden;
+}
+
+.analysis-workbench .linux-evidence-table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(20, 83, 45, 0.10);
+  background: #eef7f3;
+}
+
+.analysis-workbench.dark .linux-evidence-table-head {
+  border-bottom-color: rgba(94, 234, 212, 0.10);
+  background: #101b20;
+}
+
+.analysis-workbench.dark .linux-evidence-table-head .ant-typography {
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-evidence-section-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.analysis-workbench .linux-evidence-section {
+  overflow: hidden;
+}
+
+.analysis-workbench .linux-evidence-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(20, 83, 45, 0.10);
+  background: #eef7f3;
+}
+
+.analysis-workbench.dark .linux-evidence-section-head {
+  border-bottom-color: rgba(94, 234, 212, 0.10);
+  background: #101b20;
+}
+
+.analysis-workbench.dark .linux-evidence-section-head .ant-typography {
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-evidence-items {
+  display: flex;
+  flex-direction: column;
+}
+
+.analysis-workbench .linux-evidence-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid rgba(20, 83, 45, 0.08);
+  background: transparent;
+  color: #16312b;
+  text-align: left;
+  cursor: pointer;
+}
+
+.analysis-workbench .linux-evidence-item:hover {
+  background: rgba(15, 118, 110, 0.06);
+}
+
+.analysis-workbench.dark .linux-evidence-item {
+  border-bottom-color: rgba(94, 234, 212, 0.08);
+  color: #d8e8e2;
+}
+
+.analysis-workbench.dark .linux-evidence-item:hover {
+  background: rgba(94, 234, 212, 0.06);
+}
+
+.analysis-workbench .linux-evidence-path {
+  overflow: hidden;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-workbench .linux-evidence-item-multiline {
+  gap: 6px;
+}
+
+.analysis-workbench .linux-evidence-line {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.analysis-workbench.dark .linux-evidence-line {
+  color: #8aa39b;
+}
+
+.analysis-workbench .linux-evidence-snippet {
+  display: block;
+  overflow: hidden;
+  padding: 8px;
+  border-radius: 4px;
+  background: #f1f5f2;
+  color: #9f1239;
+  font-size: 11px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-workbench.dark .linux-evidence-snippet {
+  background: #071012;
+  color: #fda4af;
+}
+
+.analysis-workbench .linux-evidence-empty {
+  padding: 24px;
+}
+
+.analysis-workbench .linux-database-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: #16312b;
+}
+
+.analysis-workbench.dark .linux-database-workbench {
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-database-commandbar,
+.analysis-workbench .linux-database-engine-card,
+.analysis-workbench .linux-database-tabs,
+.analysis-workbench .linux-database-panel,
+.analysis-workbench .linux-database-debug {
+  border: 1px solid rgba(20, 83, 45, 0.12);
+  border-radius: 6px;
+  background: #f8fcfa;
+}
+
+.analysis-workbench.dark .linux-database-commandbar,
+.analysis-workbench.dark .linux-database-engine-card,
+.analysis-workbench.dark .linux-database-tabs,
+.analysis-workbench.dark .linux-database-panel,
+.analysis-workbench.dark .linux-database-debug {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: #0b1518;
+}
+
+.analysis-workbench .linux-database-commandbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+}
+
+.analysis-workbench .linux-database-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.analysis-workbench .linux-database-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.analysis-workbench .linux-database-debug {
+  overflow: hidden;
+}
+
+.analysis-workbench .linux-database-debug summary {
+  padding: 9px 12px;
+  color: #45665d;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.analysis-workbench.dark .linux-database-debug summary {
+  color: #a9c9c2;
+}
+
+.analysis-workbench .linux-database-debug pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border-top: 1px solid rgba(20, 83, 45, 0.10);
+  background: #ffffff;
+  color: #16312b;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.analysis-workbench.dark .linux-database-debug pre {
+  border-top-color: rgba(94, 234, 212, 0.10);
+  background: #071012;
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-database-engine-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.analysis-workbench .linux-database-engine-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.analysis-workbench .linux-database-engine-name {
+  color: #103127;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.analysis-workbench.dark .linux-database-engine-name {
+  color: #ecfdf5;
+}
+
+.analysis-workbench .linux-database-tabs {
+  overflow: hidden;
+  padding: 0 12px 12px;
+}
+
+.analysis-workbench .linux-database-tabs > .ant-tabs > .ant-tabs-nav {
+  margin-bottom: 12px;
+}
+
+.analysis-workbench .linux-database-tabs .ant-tabs-tab {
+  color: #365c51;
+  font-size: 13px;
+}
+
+.analysis-workbench.dark .linux-database-tabs .ant-tabs-tab {
+  color: #9fb5ae;
+}
+
+.analysis-workbench .linux-database-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #0f766e !important;
+  font-weight: 700;
+}
+
+.analysis-workbench.dark .linux-database-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #5eead4 !important;
+}
+
+.analysis-workbench .linux-database-tabs .ant-tabs-ink-bar {
+  background: #0f766e;
+}
+
+.analysis-workbench.dark .linux-database-tabs .ant-tabs-ink-bar {
+  background: #5eead4;
+}
+
+.analysis-workbench .linux-database-engine-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-workbench .linux-database-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.analysis-workbench .linux-database-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(20, 83, 45, 0.10);
+  border-radius: 6px;
+  background: #eef7f3;
+}
+
+.analysis-workbench.dark .linux-database-meta-item {
+  border-color: rgba(94, 234, 212, 0.10);
+  background: #101b20;
+}
+
+.analysis-workbench .linux-database-meta-item span {
+  color: #60756f;
+  font-size: 12px;
+}
+
+.analysis-workbench.dark .linux-database-meta-item span {
+  color: #8aa39b;
+}
+
+.analysis-workbench .linux-database-meta-item strong {
+  overflow: hidden;
+  color: #103127;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-workbench.dark .linux-database-meta-item strong {
+  color: #ecfdf5;
+}
+
+.analysis-workbench .linux-database-section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-workbench .linux-database-split {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(280px, 1.25fr);
+  gap: 12px;
+}
+
+.analysis-workbench .linux-database-panel {
+  overflow: hidden;
+}
+
+.analysis-workbench .linux-database-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(20, 83, 45, 0.10);
+  background: #eef7f3;
+}
+
+.analysis-workbench.dark .linux-database-panel-head {
+  border-bottom-color: rgba(94, 234, 212, 0.10);
+  background: #101b20;
+}
+
+.analysis-workbench.dark .linux-database-panel-head .ant-typography {
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-database-table {
+  overflow: hidden;
+}
+
+.analysis-workbench .linux-database-row-selected > td {
+  background: rgba(15, 118, 110, 0.08) !important;
+}
+
+.analysis-workbench.dark .linux-database-row-selected > td {
+  background: rgba(94, 234, 212, 0.08) !important;
+}
+
+.analysis-workbench .linux-database-empty-note {
+  padding: 28px 12px;
+  color: #60756f;
+  font-size: 12px;
+  text-align: center;
+}
+
+.analysis-workbench.dark .linux-database-empty-note {
+  color: #8aa39b;
+}
+
+.analysis-workbench .linux-database-token-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analysis-workbench .linux-database-pre {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid rgba(20, 83, 45, 0.10);
+  border-radius: 6px;
+  background: #ffffff;
+  color: #16312b;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.analysis-workbench.dark .linux-database-pre {
+  border-color: rgba(94, 234, 212, 0.10);
+  background: #071012;
+  color: #d8e8e2;
+}
+
+@media (max-width: 900px) {
+  .analysis-workbench .linux-evidence-scan-commandbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .analysis-workbench .linux-evidence-scan-controls,
+  .analysis-workbench .linux-evidence-scan-controls-single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-workbench .linux-database-commandbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .analysis-workbench .linux-database-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .analysis-workbench .windows-module-body {

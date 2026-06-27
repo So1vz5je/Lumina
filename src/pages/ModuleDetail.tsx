@@ -46,6 +46,7 @@ interface RemoteTerminalErrorEvent {
 
 interface LuminaTerminalWindow extends Window {
     __luminaRemoteTerminalSession?: RemoteInteractiveTerminalSession | null;
+    __luminaRemoteTerminalOpenPromise?: Promise<RemoteInteractiveTerminalSession> | null;
 }
 
 const getLuminaTerminalWindow = () => window as LuminaTerminalWindow;
@@ -1102,6 +1103,7 @@ const moduleLabels: Record<string, string> = {
     win_system_log: '系统日志',
     win_app_log: '应用程序日志',
     win_powershell_log: 'PowerShell日志',
+    windows_timeline: '调查时间线',
     security_events: '安全事件',
     process_anomaly: '进程异常检测',
     persistence: '持久化检测',
@@ -1143,6 +1145,7 @@ const windowsModuleMeta: Record<string, { title: string; group: string; descript
     hosts_file: { title: 'Hosts 文件', group: '网络暴露', description: 'Hosts 静态解析记录，关注劫持和异常域名。' },
     win_defender: { title: 'Defender 状态', group: '安全与日志', description: '实时防护、签名版本、引擎版本、扫描年龄和排除项。' },
     defender_history: { title: 'Defender 检测历史', group: '安全与日志', description: 'Defender 威胁、检测记录、隔离和排除项痕迹。' },
+    windows_timeline: { title: '调查时间线', group: '安全与日志', description: '聚合安全事件、近期文件和持久化入口，按时间倒序还原主机活动线索。' },
     security_events: { title: '高价值安全事件', group: '安全与日志', description: '登录失败、特权分配、账户变更、锁定等关键 Security 事件。' },
     rdp_logon_trace: { title: 'RDP 登录链路', group: '安全与日志', description: 'Security 登录事件和 TerminalServices 通道中的远程桌面登录链路。' },
     win_security_log: { title: 'Security 日志', group: '安全与日志', description: 'Windows Security 事件日志近端记录。' },
@@ -1245,6 +1248,7 @@ export const windowsLocalColumnTitles: Record<string, Record<string, string>> = 
     win_system_log: { time: '时间', id: '事件 ID', content: '消息' },
     win_app_log: { time: '时间', id: '事件 ID', content: '消息' },
     win_powershell_log: { time: '时间', id: '事件 ID', content: '消息' },
+    windows_timeline: { time: '时间', category: '类别', source: '来源', title: '标题', actor: '主体', target: '目标', risk: '风险', detail: '详情' },
     powershell_deep: { category: '类别', source: '来源', name: '事件 / 历史', path: '通道 / 文件', time: '时间', detail: '详情', status: '状态', risk: '风险', eventId: '事件 ID', user: '账号', ip: '来源 IP' },
     file_scan: { section: '类别', name: '文件名', path: '路径', directory: '目录', size: '大小', modified: '修改时间', extension: '扩展名', risk: '风险' },
     suspicious_files: { type: '类型', filename: '文件名', path: '路径', directory: '目录', risk: '风险', reason: '原因' },
@@ -1252,7 +1256,7 @@ export const windowsLocalColumnTitles: Record<string, Record<string, string>> = 
     recent_files: { name: '文件名', lastAccess: '最后访问时间', path: '路径', targetPath: '目标路径' },
     env_vars: { name: '变量名', risk: '风险', category: '分类', note: '说明', value: '值' },
     browser: { name: '浏览器', profile: '配置', value: '配置目录', lastWriteTime: '配置更新时间', historyPath: '历史库', historyLastWriteTime: '历史更新时间', status: '状态' },
-    process_anomaly: { type: '异常类型', pid: 'PID', user: '用户', path: '路径 / 链接', detail: '详情', severity: '级别' },
+    process_anomaly: { type: '异常类型', pid: 'PID', ppid: '父 PID', name: '进程名', parent: '父进程', user: '用户', path: '路径 / 链接', command: '命令行', signer: '签名', sha256: 'SHA256', detail: '详情', severity: '级别' },
     docker: { container_id: '容器 ID', image: '镜像', status: '状态', names: '名称', ports: '端口' },
     docker_images: { repository: '仓库', tag: '标签', image_id: '镜像 ID', size: '大小', created: '创建时间' },
     database: { source: '来源', name: '名称', type: '类型', status: '状态', port: '端口', pid: 'PID', version: '说明', path: '路径' },
@@ -1804,6 +1808,86 @@ $rows | ConvertTo-Json -Compress -Depth 5
 
 windowsLocalCommands.browser = `powershell.exe -NoProfile -Command "function Get-BrowserProfiles($browser, $root) { if (-not (Test-Path $root)) { return @() }; @(Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' -or $browser -eq 'Firefox' } | ForEach-Object { $history = if ($browser -eq 'Firefox') { Join-Path $_.FullName 'places.sqlite' } else { Join-Path $_.FullName 'History' }; [pscustomobject]@{ Browser=$browser; Profile=$_.Name; Path=$_.FullName; LastWriteTime=$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'); HistoryPath=if (Test-Path $history) { $history } else { '' }; HistoryLastWriteTime=if (Test-Path $history) { (Get-Item $history).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' } } }) }; echo ===CHROME===; @(Get-BrowserProfiles 'Chrome' (Join-Path $env:LOCALAPPDATA 'Google\\Chrome\\User Data')) | ConvertTo-Json -Compress -Depth 4; echo ===EDGE===; @(Get-BrowserProfiles 'Edge' (Join-Path $env:LOCALAPPDATA 'Microsoft\\Edge\\User Data')) | ConvertTo-Json -Compress -Depth 4; echo ===FIREFOX===; @(Get-BrowserProfiles 'Firefox' (Join-Path $env:APPDATA 'Mozilla\\Firefox\\Profiles')) | ConvertTo-Json -Compress -Depth 4"`;
 
+function buildWindowsProcessAnomalyCommand(): string {
+    return buildWindowsPowerShellCommand(`
+$rows = New-Object System.Collections.ArrayList;
+$processes = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue);
+$parentNames = @{};
+foreach ($proc in $processes) { $parentNames[[string]$proc.ProcessId] = [string]$proc.Name }
+$topCpu = @{};
+$script:hashBudget = 30;
+try { Get-Process -ErrorAction SilentlyContinue | Sort-Object CPU -Descending | Select-Object -First 8 | ForEach-Object { $topCpu[[string]$_.Id] = $_ } } catch {}
+function Add-ProcessRow { param($type,$severity,$proc,$detail); $path=[string]$proc.ExecutablePath; $owner=''; try { $o=Invoke-CimMethod -InputObject $proc -MethodName GetOwner -ErrorAction SilentlyContinue; if ($o -and $o.User) { $owner=(@($o.Domain,$o.User) | Where-Object { $_ }) -join '\\' } } catch {}; $signer=''; $hash=''; if ($path -and (Test-Path -LiteralPath $path)) { try { $sig=Get-AuthenticodeSignature -LiteralPath $path -ErrorAction SilentlyContinue; if ($sig) { $signer=[string]$sig.Status } } catch {}; if ($severity -eq 'high' -and $script:hashBudget -gt 0) { try { $hash=(Get-FileHash -LiteralPath $path -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash; $script:hashBudget-- } catch {} } }; [void]$rows.Add([pscustomobject]@{ type=[string]$type; pid=[string]$proc.ProcessId; ppid=[string]$proc.ParentProcessId; name=[string]$proc.Name; user=[string]$owner; path=$path; command=[string]$proc.CommandLine; parent=[string]$parentNames[[string]$proc.ParentProcessId]; signer=$signer; sha256=[string]$hash; detail=[string]$detail; severity=[string]$severity }) }
+foreach ($proc in $processes) {
+    if ($rows.Count -ge 120) { break }
+    $path = [string]$proc.ExecutablePath;
+    $cmd = [string]$proc.CommandLine;
+    $lowerPath = $path.ToLowerInvariant();
+    $isUserWritablePath = $lowerPath -like '*\\users\\public\\*' -or $lowerPath -like '*\\appdata\\*' -or $lowerPath -like '*\\temp\\*' -or $lowerPath -like '*\\downloads\\*' -or $lowerPath -like '*\\programdata\\*';
+    if ($isUserWritablePath -and $lowerPath -notlike '*\\microsoft\\windows\\*' -and $lowerPath -notlike '*\\appdata\\local\\microsoft\\onedrive\\*') { Add-ProcessRow 'SENSITIVE_PATH' 'warning' $proc 'Process image is under a user-writable or staging path'; continue }
+    $scriptIndicator = $cmd -match '(EncodedCommand|FromBase64String|DownloadString|IEX|Invoke-Expression)';
+    $lolbinIndicator = $cmd -match '(mshta|wscript|cscript|regsvr32|bitsadmin|certutil)';
+    $rundllIndicator = $cmd -match 'rundll32' -and $cmd -match '(http|https|AppData|Temp|Public|Users|javascript)';
+    if ($scriptIndicator -or $lolbinIndicator -or $rundllIndicator) { Add-ProcessRow 'SUSPICIOUS_COMMAND' 'high' $proc 'Command line contains script execution or living-off-the-land indicators'; continue }
+    if ($topCpu.ContainsKey([string]$proc.ProcessId)) { $cpu=$topCpu[[string]$proc.ProcessId].CPU; Add-ProcessRow 'HIGH_RESOURCES' 'info' $proc ('High CPU sample, cumulative CPU=' + $cpu) }
+}
+$rows | ConvertTo-Json -Compress -Depth 5
+    `);
+}
+
+function buildWindowsTimelineCommand(): string {
+    return buildWindowsPowerShellCommand(`
+$rows = New-Object System.Collections.ArrayList;
+function Add-TimelineRow { param($time,$category,$source,$title,$actor,$target,$risk,$detail); [void]$rows.Add([pscustomobject]@{ time=[string]$time; category=[string]$category; source=[string]$source; title=[string]$title; actor=[string]$actor; target=[string]$target; risk=[string]$risk; detail=[string]$detail }) }
+try {
+    $ids = @(4624,4625,4648,4672,4720,4722,4724,4725,4726,4728,4732,4738,4740,4776);
+    Get-WinEvent -FilterHashtable @{LogName='Security'; ID=$ids} -MaxEvents 100 -ErrorAction Stop | ForEach-Object {
+        $msg = ($_.Message -replace '[\\r\\n]+', ' ');
+        $eventType = switch ($_.Id) { 4624 { 'Logon success' } 4625 { 'Failed logon' } 4648 { 'Explicit credentials logon' } 4672 { 'Special privileges assigned' } 4720 { 'User created' } 4722 { 'User enabled' } 4724 { 'Password reset' } 4725 { 'User disabled' } 4726 { 'User deleted' } 4728 { 'Added to security group' } 4732 { 'Added to local group' } 4738 { 'User account changed' } 4740 { 'Account locked' } 4776 { 'Credential validation' } default { 'Security event' } };
+        $user = ''; if ($msg -match 'Account Name:\\s+([^\\s]+)') { $user = $Matches[1] };
+        $ip = ''; if ($msg -match 'Source Network Address:\\s+([^\\s]+)') { $ip = $Matches[1] };
+        $risk = if ($_.Id -in @(4625,4672,4720,4726,4740)) { 'high' } elseif ($_.Id -in @(4648,4724,4728,4732)) { 'warning' } else { 'info' };
+        Add-TimelineRow $_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss') 'Security' ('Security ' + $_.Id) $eventType $user $ip $risk $msg;
+    }
+} catch {}
+try {
+    Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue | Select-Object -First 80 | ForEach-Object {
+        $risk = if ($_.Command -match '(powershell|cmd\\.exe|mshta|wscript|cscript|rundll32|regsvr32|AppData|Temp|Public|ProgramData)') { 'warning' } else { 'info' };
+        Add-TimelineRow '' 'Persistence' 'Startup Command' $_.Name $_.User $_.Command $risk (($_.Location, $_.Command) -join ' | ');
+    }
+} catch {}
+try {
+    Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.State -ne 'Disabled' } | Select-Object -First 100 | ForEach-Object {
+        $task = $_;
+        $info = $null; try { $info = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue } catch {};
+        $action = @($task.Actions | ForEach-Object { @($_.Execute, $_.Arguments, $_.ClassId) -join ' ' }) -join '; ';
+        $risk = if ($action -match '(powershell|cmd\\.exe|mshta|wscript|cscript|rundll32|regsvr32|AppData|Temp|Public|ProgramData)') { 'warning' } else { 'info' };
+        $time = if ($info -and $info.LastRunTime -and $info.LastRunTime.Year -gt 1900) { $info.LastRunTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' };
+        $detail = (('State=' + $task.State), ('Action=' + $action)) -join ' | ';
+        Add-TimelineRow $time 'Persistence' 'Scheduled Task' ($task.TaskPath + $task.TaskName) $task.Author $action $risk $detail;
+    }
+} catch {}
+try {
+    $roots = @([Environment]::GetFolderPath('Recent'), (Join-Path $env:USERPROFILE 'Downloads'), $env:TEMP, (Join-Path $env:WINDIR 'Temp'), 'C:\\inetpub\\wwwroot', 'C:\\phpstudy_pro\\WWW', 'C:\\xampp\\htdocs', 'C:\\wamp64\\www', 'C:\\BtSoft\\WebSites') | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique;
+    foreach ($root in $roots) {
+        Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-7) } | Sort-Object LastWriteTime -Descending | Select-Object -First 80 | ForEach-Object {
+            $risk = if ($_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar|php|asp|aspx|jsp|jspx)$') { 'warning' } else { 'info' };
+            $detail = (('Size=' + $_.Length), ('Extension=' + $_.Extension)) -join ' | ';
+            Add-TimelineRow $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') 'File' 'Recent file' $_.Name $env:USERNAME $_.FullName $risk $detail;
+        }
+    }
+} catch {}
+try {
+    Get-MpThreatDetection -ErrorAction SilentlyContinue | Select-Object -First 80 | ForEach-Object {
+        $time = if ($_.InitialDetectionTime) { $_.InitialDetectionTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' };
+        $detail = (('Action=' + $_.ActionSuccess), ('Status=' + $_.ThreatStatus)) -join ' | ';
+        Add-TimelineRow $time 'Defense' 'Defender' $_.ThreatName $env:COMPUTERNAME ($_.Resources -join '; ') 'high' $detail;
+    }
+} catch {}
+$rows | Sort-Object @{Expression={ if ($_.time) { [datetime]$_.time } else { [datetime]::MinValue } }; Descending=$true} | Select-Object -First 300 | ConvertTo-Json -Compress -Depth 5
+    `);
+}
+
 function buildWindowsEventLogCommand(
     logName: string,
     startTimeExpression?: string,
@@ -1861,7 +1945,9 @@ windowsLocalCommands.win_security_log = buildWindowsEventLogCommand('Security');
 windowsLocalCommands.win_system_log = buildWindowsEventLogCommand('System');
 windowsLocalCommands.win_app_log = buildWindowsEventLogCommand('Application');
 windowsLocalCommands.win_powershell_log = buildWindowsEventLogCommand('Windows PowerShell');
+windowsLocalCommands.windows_timeline = buildWindowsTimelineCommand();
 windowsLocalCommands.security_events = buildWindowsSecurityEventsCommand();
+windowsLocalCommands.process_anomaly = buildWindowsProcessAnomalyCommand();
 windowsLocalCommands.logged_users = `powershell.exe -NoProfile -Command "$rows = @(); $queryCmd = Get-Command quser.exe,query.exe -ErrorAction SilentlyContinue | Select-Object -First 1; $lines = @(); if ($queryCmd) { if ($queryCmd.Name -eq 'query.exe') { $lines = @(& $queryCmd.Source user 2>$null) } else { $lines = @(& $queryCmd.Source 2>$null) } }; if ($lines.Count -gt 0) { foreach ($line in ($lines | Select-Object -Skip 1)) { $clean = ($line -replace '^\\s*>', '').Trim(); if (-not $clean) { continue }; if ($clean -match '^(?<User>\\S+)\\s+(?:(?<SessionName>\\S+)\\s+)?(?<SessionId>\\d+)\\s+(?<State>\\S+)\\s+(?<IdleTime>\\S+)\\s+(?<LogonTime>.+)$') { $session = $Matches.SessionName; $source = if ($session -match 'rdp|tcp') { 'Remote' } else { 'Local' }; $logonType = if ($source -eq 'Remote') { 10 } else { 2 }; $rows += [pscustomobject]@{ User=$Matches.User; SessionName=$session; SessionId=[int]$Matches.SessionId; State=$Matches.State; IdleTime=$Matches.IdleTime; LogonTime=$Matches.LogonTime.Trim(); Source=$source; LogonType=$logonType } } } }; if ($rows.Count -eq 0) { $rows = @([pscustomobject]@{ User=$env:USERNAME; SessionName='console'; SessionId=$null; State='Active'; IdleTime='-'; LogonTime='-'; Source='Local'; LogonType=2 }) }; $rows | ConvertTo-Json -Compress -Depth 3"`;
 windowsLocalCommands.file_scan = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$winTemp = if ($env:WINDIR) { Join-Path $env:WINDIR 'Temp' } else { 'C:\\Windows\\Temp' }; $tempRoots = @($env:TEMP, $winTemp) | Where-Object { $_ -and (Test-Path $_) }; $publicDownloads = if ($env:PUBLIC) { Join-Path $env:PUBLIC 'Downloads' } else { $null }; $userDownloads = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'Downloads' } else { $null }; $execRoots = @($publicDownloads, $userDownloads, $env:APPDATA, $env:LOCALAPPDATA) | Where-Object { $_ -and (Test-Path $_) }; function Emit($name, $items) { Write-Output ('===' + $name + '==='); @($items) | ConvertTo-Json -Compress -Depth 4 }; $recentTemp = @(); foreach ($root in $tempRoots) { $recentTemp += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-1) }) }; Emit 'RECENT_TEMP' ($recentTemp | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension); $executables = @(); foreach ($root in $execRoots) { $executables += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; Emit 'USER_WRITABLE_EXECUTABLES' ($executables | Sort-Object LastWriteTime -Descending | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension); $webRoots = @('C:\\inetpub\\wwwroot','C:\\phpstudy_pro\\WWW','C:\\xampp\\htdocs','C:\\wamp64\\www','C:\\BtSoft\\WebSites') | Where-Object { Test-Path $_ }; $webFiles = @(); foreach ($root in $webRoots) { $webFiles += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Extension -match '^\\.(php|asp|aspx|jsp|jspx|js|config)$' }) }; Emit 'RECENT_WEBROOT' ($webFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 200 FullName,Name,Length,@{N='LastWriteTime';E={$_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')}},Extension)"`;
 windowsLocalCommands.suspicious_files = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$winTemp = if ($env:WINDIR) { Join-Path $env:WINDIR 'Temp' } else { 'C:\\Windows\\Temp' }; $tempRoots = @($env:TEMP, $winTemp) | Where-Object { $_ -and (Test-Path $_) }; $userDownloads = if ($env:USERPROFILE) { Join-Path $env:USERPROFILE 'Downloads' } else { $null }; $roots = @($tempRoots, $userDownloads, $env:APPDATA, $env:LOCALAPPDATA) | Where-Object { $_ -and (Test-Path $_) }; Write-Output '===RECENT_TEMP==='; $recentTemp = @(); foreach ($root in $tempRoots) { $recentTemp += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-1) }) }; $recentTemp | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===TEMP_EXE==='; $tempExe = @(); foreach ($root in $tempRoots) { $tempExe += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $tempExe | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===HIDDEN_EXE==='; $hiddenExe = @(); foreach ($root in $roots) { $hiddenExe += @(Get-ChildItem -LiteralPath $root -File -Force -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Attributes -band [IO.FileAttributes]::Hidden -and $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $hiddenExe | Select-Object -First 80 -ExpandProperty FullName; Write-Output '===RECENT_MODIFIED==='; $recentExec = @(); foreach ($root in $roots) { $recentExec += @(Get-ChildItem -LiteralPath $root -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Extension -match '^\\.(exe|dll|ps1|bat|cmd|vbs|js|jar)$' }) }; $recentExec | Sort-Object LastWriteTime -Descending | Select-Object -First 120 -ExpandProperty FullName"`;
@@ -2236,7 +2322,6 @@ export default function ModuleDetail({
         let streamCleanup: (() => void) | undefined;
         let errorCleanup: (() => void) | undefined;
         let closedCleanup: (() => void) | undefined;
-        let openedSession: RemoteInteractiveTerminalSession | null = null;
         const terminalWindow = getLuminaTerminalWindow();
         const cachedSession = terminalWindow.__luminaRemoteTerminalSession ?? null;
 
@@ -2293,18 +2378,29 @@ export default function ModuleDetail({
                     return;
                 }
 
-                const session = await invoke<RemoteInteractiveTerminalSession>(
-                    'remote_open_active_terminal_session',
-                    {
-                        title: 'analysis-shell',
-                        cols: 120,
-                        rows: 48,
-                    },
-                );
-                openedSession = session;
+                let openPromise = terminalWindow.__luminaRemoteTerminalOpenPromise ?? null;
+                if (!openPromise) {
+                    openPromise = invoke<RemoteInteractiveTerminalSession>(
+                        'remote_open_active_terminal_session',
+                        {
+                            title: 'analysis-shell',
+                            cols: 120,
+                            rows: 48,
+                        },
+                    ).then((session) => {
+                        terminalWindow.__luminaRemoteTerminalSession = session;
+                        return session;
+                    }).finally(() => {
+                        if (terminalWindow.__luminaRemoteTerminalOpenPromise === openPromise) {
+                            terminalWindow.__luminaRemoteTerminalOpenPromise = null;
+                        }
+                    });
+                    terminalWindow.__luminaRemoteTerminalOpenPromise = openPromise;
+                }
+
+                const session = await openPromise;
 
                 if (cancelled) {
-                    await invoke('remote_close_terminal_session', { sessionId: session.id }).catch(() => undefined);
                     return;
                 }
 
@@ -2312,12 +2408,7 @@ export default function ModuleDetail({
                 terminalSessionRef.current = session;
                 setTerminalSession(session);
             } catch (error) {
-                if (
-                    openedSession
-                    && terminalWindow.__luminaRemoteTerminalSession?.id === openedSession.id
-                ) {
-                    terminalWindow.__luminaRemoteTerminalSession = null;
-                }
+                if (cancelled) return;
                 terminalSessionRef.current = null;
                 setTerminalSession(null);
                 appendTerminalOutput(`远程交互终端启动失败，已回退到命令模式: ${error}\n`);
@@ -5013,6 +5104,34 @@ export default function ModuleDetail({
                 break;
             }
             case 'process_anomaly': {
+                if (osType === 'Windows') {
+                    const jsonData = tryParseJsonArray(output);
+                    if (jsonData) {
+                        const data = jsonData.map((item: any, i: number) => ({
+                            key: i,
+                            type: String(item.type ?? item.Type ?? '-'),
+                            pid: String(item.pid ?? item.Pid ?? item.ProcessId ?? '-'),
+                            ppid: String(item.ppid ?? item.Ppid ?? item.ParentProcessId ?? '-'),
+                            name: String(item.name ?? item.Name ?? item.ProcessName ?? '-'),
+                            user: String(item.user ?? item.User ?? item.Owner ?? '-'),
+                            path: String(item.path ?? item.Path ?? item.ExecutablePath ?? '-'),
+                            command: String(item.command ?? item.Command ?? item.CommandLine ?? '-'),
+                            parent: String(item.parent ?? item.Parent ?? item.ParentName ?? '-'),
+                            signer: String(item.signer ?? item.Signer ?? item.SignatureStatus ?? '-'),
+                            sha256: String(item.sha256 ?? item.Sha256 ?? item.Hash ?? '-'),
+                            detail: String(item.detail ?? item.Detail ?? item.Reason ?? '-'),
+                            severity: String(item.severity ?? item.Severity ?? 'info').toLowerCase(),
+                        }));
+
+                        if (data.length === 0) {
+                            setNoRecordsDiagnostic('process_anomaly', lines, 'Windows process deep analysis returned no suspicious process rows. Cross-check process list, network connections, recent files, and execution traces if suspicion remains.');
+                        } else {
+                            setTableData(data);
+                        }
+                        break;
+                    }
+                }
+
                 // 进程异常检测解析
                 const sections = output.split(/===([A-Z_]+)===/);
                 const result: any[] = [];
@@ -6254,6 +6373,41 @@ export default function ModuleDetail({
                     setNoRecordsDiagnostic('file_scan', lines, '文件扫描命令已执行，但最近临时文件、用户可写可执行文件和 Web 目录中没有发现命中项。可扩大扫描路径或时间范围后重新采集。');
                 } else {
                     setTableData(result);
+                }
+                break;
+            }
+        case 'windows_timeline': {
+                const jsonData = tryParseJsonArray(output);
+                if (!jsonData) {
+                    setParseFailureDiagnostic('windows_timeline', output, 'Windows timeline output is not valid JSON. Check PowerShell collection output and rerun as administrator if needed.');
+                    break;
+                }
+
+                const parseTimelineTime = (value: string): number => {
+                    if (!value || value === '-') return 0;
+                    const timestamp = Date.parse(value.replace(' ', 'T'));
+                    return Number.isFinite(timestamp) ? timestamp : 0;
+                };
+
+                const data = jsonData.map((item: any, i: number) => {
+                    const risk = String(item.risk ?? item.Risk ?? 'info').toLowerCase();
+                    return {
+                        key: i,
+                        time: String(item.time ?? item.Time ?? item.TimeCreated ?? item.LastWriteTime ?? '-'),
+                        category: String(item.category ?? item.Category ?? '-'),
+                        source: String(item.source ?? item.Source ?? '-'),
+                        title: String(item.title ?? item.Title ?? item.name ?? item.Name ?? item.EventType ?? '-'),
+                        actor: String(item.actor ?? item.Actor ?? item.user ?? item.User ?? item.Username ?? '-'),
+                        target: String(item.target ?? item.Target ?? item.path ?? item.Path ?? item.SourceIp ?? '-'),
+                        risk: ['high', 'warning', 'info'].includes(risk) ? risk : 'info',
+                        detail: String(item.detail ?? item.Detail ?? item.description ?? item.Description ?? item.message ?? item.Message ?? '-'),
+                    };
+                }).sort((a, b) => parseTimelineTime(b.time) - parseTimelineTime(a.time));
+
+                if (data.length === 0) {
+                    setNoRecordsDiagnostic('windows_timeline', lines, 'Windows timeline returned no rows. Security events, recent files, persistence entries, and Defender detections did not produce timeline records.');
+                } else {
+                    setTableData(data);
                 }
                 break;
             }
@@ -8171,15 +8325,22 @@ export default function ModuleDetail({
                             HIDDEN: { label: '隐藏进程', color: 'volcano' },
                             DELETED: { label: '文件已删除', color: 'red' },
                             SENSITIVE_PATH: { label: '敏感路径', color: 'orange' },
+                            SUSPICIOUS_COMMAND: { label: '可疑命令', color: 'red' },
                             HIGH_RESOURCES: { label: '高负载', color: 'blue' }
                         };
                         return <Tag color={types[v]?.color || 'default'}>{types[v]?.label || v}</Tag>;
                     }
                 },
                 { title: 'PID', dataIndex: 'pid', width: 80 },
-                { title: '用户', dataIndex: 'user', width: 80 },
-                { title: '路径/链接', dataIndex: 'path', ellipsis: true, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v || '-'}</Text> },
-                { title: '详细信息', dataIndex: 'detail', ellipsis: true },
+                { title: '父 PID', dataIndex: 'ppid', width: 90 },
+                { title: '进程名', dataIndex: 'name', width: 150, ellipsis: true },
+                { title: '父进程', dataIndex: 'parent', width: 150, ellipsis: true },
+                { title: '用户', dataIndex: 'user', width: 150, ellipsis: true },
+                { title: '路径/链接', dataIndex: 'path', width: 260, ellipsis: true, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v || '-'}</Text> },
+                { title: '命令行', dataIndex: 'command', width: 260, ellipsis: true, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v || '-'}</Text> },
+                { title: '签名', dataIndex: 'signer', width: 120 },
+                { title: 'SHA256', dataIndex: 'sha256', width: 260, ellipsis: true, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v || '-'}</Text> },
+                { title: '详细信息', dataIndex: 'detail', width: 260, ellipsis: true },
                 {
                     title: '等级',
                     dataIndex: 'severity',
@@ -8254,6 +8415,16 @@ export default function ModuleDetail({
                 { title: '时间', dataIndex: 'time', width: 180 },
                 { title: 'ID', dataIndex: 'id', width: 80 },
                 { title: '消息内容', dataIndex: 'content', ellipsis: true },
+            ],
+            windows_timeline: [
+                { title: '时间', dataIndex: 'time', width: 170 },
+                { title: '类别', dataIndex: 'category', width: 110, render: (v: string) => <Tag color="blue">{v}</Tag> },
+                { title: '来源', dataIndex: 'source', width: 150, ellipsis: true },
+                { title: '标题', dataIndex: 'title', width: 220, ellipsis: true },
+                { title: '主体', dataIndex: 'actor', width: 150, ellipsis: true },
+                { title: '目标', dataIndex: 'target', width: 260, ellipsis: true, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v}</Text> },
+                { title: '风险', dataIndex: 'risk', width: 90, render: (v: string) => <Tag color={v === 'high' ? 'red' : v === 'warning' ? 'orange' : 'blue'}>{v}</Tag> },
+                { title: '详情', dataIndex: 'detail', ellipsis: true },
             ],
             registry: [
                 { title: '区域', dataIndex: 'section', width: 120, render: (v: string) => <Tag color="blue">{v}</Tag> },
@@ -9205,12 +9376,17 @@ export default function ModuleDetail({
         columnConfigs['process_anomaly'] = [
             { title: 'Type', dataIndex: 'type', width: 130 },
             { title: 'PID', dataIndex: 'pid', width: 90 },
-            { title: 'User', dataIndex: 'user', width: 120 },
+            { title: 'PPID', dataIndex: 'ppid', width: 90 },
+            { title: 'Name', dataIndex: 'name', width: 150, ellipsis: true },
+            { title: 'Parent', dataIndex: 'parent', width: 150, ellipsis: true },
+            { title: 'User', dataIndex: 'user', width: 150, ellipsis: true },
             { title: 'Path', dataIndex: 'path', width: 260, ellipsis: true },
             { title: 'CPU%', dataIndex: 'cpu', width: 80 },
             { title: 'MEM%', dataIndex: 'mem', width: 80 },
-            { title: 'Command', dataIndex: 'command', width: 240, ellipsis: true },
-            { title: 'Detail', dataIndex: 'detail', ellipsis: true },
+            { title: 'Command', dataIndex: 'command', width: 260, ellipsis: true },
+            { title: 'Signer', dataIndex: 'signer', width: 120 },
+            { title: 'SHA256', dataIndex: 'sha256', width: 260, ellipsis: true },
+            { title: 'Detail', dataIndex: 'detail', width: 260, ellipsis: true },
             { title: 'Severity', dataIndex: 'severity', width: 100 },
         ];
         columnConfigs['lastlog'] = [
@@ -9224,6 +9400,16 @@ export default function ModuleDetail({
             { title: 'Item', dataIndex: 'element', width: 250 },
             { title: 'Status', dataIndex: 'status', width: 120 },
             { title: 'Value', dataIndex: 'value', ellipsis: true },
+        ];
+        columnConfigs['windows_timeline'] = [
+            { title: '时间', dataIndex: 'time', width: 170 },
+            { title: '类别', dataIndex: 'category', width: 110, render: (v: string) => <Tag color="blue">{v}</Tag> },
+            { title: '来源', dataIndex: 'source', width: 150, ellipsis: true },
+            { title: '标题', dataIndex: 'title', width: 220, ellipsis: true },
+            { title: '主体', dataIndex: 'actor', width: 150, ellipsis: true },
+            { title: '目标', dataIndex: 'target', width: 260, ellipsis: true, render: (v: string) => <Text code style={{ fontSize: 11 }}>{v}</Text> },
+            { title: '风险', dataIndex: 'risk', width: 90, render: (v: string) => <Tag color={v === 'high' ? 'red' : v === 'warning' ? 'orange' : 'blue'}>{v}</Tag> },
+            { title: '详情', dataIndex: 'detail', ellipsis: true },
         ];
         columnConfigs['persistence'] = [
             { title: 'Type', dataIndex: 'type', width: 120 },
@@ -10422,6 +10608,134 @@ export default function ModuleDetail({
             sections.push({ ...cfg, files: [...currentFiles] });
         }
 
+        const totalFindings = findings.length;
+
+        return (
+            <div className="linux-evidence-scan">
+                <div className="linux-evidence-scan-commandbar">
+                    <div className="linux-evidence-scan-title">
+                        <Text className="linux-evidence-kicker">文件证据扫描</Text>
+                        <Text strong className="linux-evidence-heading">可疑文件</Text>
+                    </div>
+                    <div className="linux-evidence-scan-actions">
+                        <span className={`linux-evidence-count ${totalFindings > 0 ? 'linux-evidence-count-risk' : ''}`}>
+                            {totalFindings > 0 ? `${totalFindings} 个发现` : '未发现命中'}
+                        </span>
+                        <Button size="small" loading={scanning} onClick={() => loadRemoteData()}>
+                            {scanning ? '扫描中' : '重新扫描'}
+                        </Button>
+                    </div>
+                </div>
+
+                <div className="linux-evidence-scan-controls">
+                    <label className="linux-evidence-field">
+                        <span>SUID/SGID 目录</span>
+                        <Input
+                            value={scanDirs.suid}
+                            onChange={(e) => setScanDirs({ ...scanDirs, suid: e.target.value })}
+                            placeholder="/usr /bin /sbin"
+                        />
+                    </label>
+                    <label className="linux-evidence-field">
+                        <span>Web 目录</span>
+                        <Input
+                            value={scanDirs.webroot}
+                            onChange={(e) => setScanDirs({ ...scanDirs, webroot: e.target.value })}
+                            placeholder="/var/www /www"
+                        />
+                    </label>
+                    <label className="linux-evidence-field">
+                        <span>临时目录</span>
+                        <Input
+                            value={scanDirs.temp}
+                            onChange={(e) => setScanDirs({ ...scanDirs, temp: e.target.value })}
+                            placeholder="/tmp /var/tmp /dev/shm"
+                        />
+                    </label>
+                </div>
+
+                {scanning && (
+                    <div className="linux-evidence-scan-loading">
+                        <Spin />
+                        <Text>正在扫描文件系统...</Text>
+                    </div>
+                )}
+
+                {!scanning && findings.length > 0 && (
+                    <div className="linux-evidence-scan-table linux-module-table">
+                        <div className="linux-evidence-table-head">
+                            <Text strong>可疑文件明细</Text>
+                            <Tag color="red">{findings.length} 个发现</Tag>
+                        </div>
+                        <Table
+                            dataSource={findings}
+                            columns={[
+                                { title: '分类', dataIndex: 'category', width: 160 },
+                                {
+                                    title: '风险',
+                                    dataIndex: 'risk',
+                                    width: 90,
+                                    render: (value: string, record: any) => <Tag color={record.riskColor}>{value}</Tag>,
+                                },
+                                { title: '文件名', dataIndex: 'file', width: 180, ellipsis: true },
+                                { title: '目录', dataIndex: 'directory', width: 240, ellipsis: true, render: (value: string) => <Text code>{value}</Text> },
+                                { title: '原因', dataIndex: 'reason', width: 260, ellipsis: true },
+                                { title: '完整路径', dataIndex: 'path', ellipsis: true, render: (value: string) => <Text code>{value}</Text> },
+                                {
+                                    title: '',
+                                    key: 'action',
+                                    width: 72,
+                                    render: (_: any, record: any) => (
+                                        <Button
+                                            type="text"
+                                            size="small"
+                                            icon={<EyeOutlined />}
+                                            aria-label={`查看 ${record.file}`}
+                                            onClick={() => openFilePreview({ name: record.file, fullPath: record.path, isDir: false })}
+                                        />
+                                    ),
+                                },
+                            ]}
+                            pagination={{ pageSize: 10 }}
+                            size="small"
+                            scroll={{ x: 1100 }}
+                        />
+                    </div>
+                )}
+
+                {!scanning && sections.length > 0 && (
+                    <div className="linux-evidence-section-list">
+                        {sections.map((section) => (
+                            <section className="linux-evidence-section" key={section.title}>
+                                <div className="linux-evidence-section-head">
+                                    <Text strong>{section.title}</Text>
+                                    <Tag color={section.files.length > 0 ? 'red' : 'green'}>{section.files.length} 个</Tag>
+                                </div>
+                                <div className="linux-evidence-items">
+                                    {section.files.map((file) => (
+                                        <button
+                                            type="button"
+                                            className="linux-evidence-item"
+                                            key={file}
+                                            onClick={() => openFilePreview({ name: file.split('/').pop() || file, fullPath: file, isDir: false })}
+                                        >
+                                            <span className="linux-evidence-path">{file}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </section>
+                        ))}
+                    </div>
+                )}
+
+                {!scanning && sections.length === 0 && (
+                    <div className="linux-evidence-empty">
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现可疑文件" />
+                    </div>
+                )}
+            </div>
+        );
+
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 {/* 扫描配置区域 */}
@@ -10658,6 +10972,122 @@ export default function ModuleDetail({
         }
 
         const totalMatches = sections.reduce((sum, s) => sum + s.matches.length, 0);
+
+        return (
+            <div className="linux-evidence-scan linux-evidence-scan-webshell">
+                <div className="linux-evidence-scan-commandbar">
+                    <div className="linux-evidence-scan-title">
+                        <Text className="linux-evidence-kicker">Web 目录证据扫描</Text>
+                        <Text strong className="linux-evidence-heading">Webshell 扫描</Text>
+                    </div>
+                    <div className="linux-evidence-scan-actions">
+                        <span className={`linux-evidence-count ${totalMatches > 0 ? 'linux-evidence-count-risk' : ''}`}>
+                            {totalMatches > 0 ? `${totalMatches} 处命中` : '未发现命中'}
+                        </span>
+                        <Button size="small" loading={scanning} onClick={() => loadRemoteData()}>
+                            {scanning ? '扫描中' : '重新扫描'}
+                        </Button>
+                    </div>
+                </div>
+
+                <div className="linux-evidence-scan-controls linux-evidence-scan-controls-single">
+                    <label className="linux-evidence-field">
+                        <span>Web 根目录</span>
+                        <Input
+                            value={scanDirs.webroot}
+                            onChange={(e) => setScanDirs({ ...scanDirs, webroot: e.target.value })}
+                            placeholder="/var/www /www /home/wwwroot"
+                        />
+                    </label>
+                </div>
+
+                {scanning && (
+                    <div className="linux-evidence-scan-loading">
+                        <Spin />
+                        <Text>正在扫描 Webshell 特征...</Text>
+                    </div>
+                )}
+
+                {!scanning && (
+                    <div className="linux-evidence-scan-summary">
+                        <span className={totalMatches > 0 ? 'linux-evidence-summary-risk' : 'linux-evidence-summary-ok'}>
+                            {totalMatches > 0 ? `发现 ${totalMatches} 处可疑代码` : '未发现 Webshell'}
+                        </span>
+                    </div>
+                )}
+
+                {!scanning && findings.length > 0 && (
+                    <div className="linux-evidence-scan-table linux-module-table">
+                        <div className="linux-evidence-table-head">
+                            <Text strong>Webshell命中明细</Text>
+                            <Tag color="red">{findings.length} 个命中</Tag>
+                        </div>
+                        <Table
+                            dataSource={findings}
+                            columns={[
+                                { title: '语言', dataIndex: 'language', width: 90, render: (value: string) => <Tag color="purple">{value}</Tag> },
+                                { title: '风险', dataIndex: 'risk', width: 90, render: (value: string) => <Tag color="red">{value}</Tag> },
+                                { title: '规则', dataIndex: 'rule', width: 150 },
+                                { title: '文件名', dataIndex: 'fileName', width: 180, ellipsis: true },
+                                { title: '行号', dataIndex: 'line', width: 90 },
+                                { title: '文件路径', dataIndex: 'file', width: 280, ellipsis: true, render: (value: string) => <Text code>{value}</Text> },
+                                { title: '证据片段', dataIndex: 'evidence', ellipsis: true, render: (value: string) => <Text code>{value}</Text> },
+                                {
+                                    title: '',
+                                    key: 'action',
+                                    width: 72,
+                                    render: (_: any, record: any) => (
+                                        <Button
+                                            type="text"
+                                            size="small"
+                                            icon={<EyeOutlined />}
+                                            aria-label={`查看 ${record.fileName}`}
+                                            onClick={() => openFilePreview({ name: record.fileName, fullPath: record.file, isDir: false })}
+                                        />
+                                    ),
+                                },
+                            ]}
+                            pagination={{ pageSize: 10 }}
+                            size="small"
+                            scroll={{ x: 1250 }}
+                        />
+                    </div>
+                )}
+
+                {!scanning && sections.length > 0 && (
+                    <div className="linux-evidence-section-list">
+                        {sections.map((section) => (
+                            <section className="linux-evidence-section" key={section.title}>
+                                <div className="linux-evidence-section-head">
+                                    <Text strong>{section.title}</Text>
+                                    <Tag color={section.matches.length > 0 ? 'red' : 'green'}>{section.matches.length} 个</Tag>
+                                </div>
+                                <div className="linux-evidence-items">
+                                    {section.matches.map((match) => (
+                                        <button
+                                            type="button"
+                                            className="linux-evidence-item linux-evidence-item-multiline"
+                                            key={`${match.file}:${match.line}`}
+                                            onClick={() => openFilePreview({ name: getPathBaseName(match.file), fullPath: match.file, isDir: false })}
+                                        >
+                                            <span className="linux-evidence-path">{match.file}</span>
+                                            <span className="linux-evidence-line">行 {match.line}</span>
+                                            <code className="linux-evidence-snippet">{match.content}</code>
+                                        </button>
+                                    ))}
+                                </div>
+                            </section>
+                        ))}
+                    </div>
+                )}
+
+                {!scanning && sections.length === 0 && (
+                    <div className="linux-evidence-empty">
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现 Webshell 命中" />
+                    </div>
+                )}
+            </div>
+        );
 
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -11288,6 +11718,218 @@ export default function ModuleDetail({
                 <Card className={cardClass}><Empty description="未检测到数据库服务" /></Card>
             );
         }
+
+        const renderDbMeta = (label: string, value: any) => (
+            <div className="linux-database-meta-item">
+                <span>{label}</span>
+                <strong>{value || '-'}</strong>
+            </div>
+        );
+
+        const modernTabItems = detectedDbs.map(db => ({
+            key: db.type,
+            label: db.name,
+            children: (
+                <div className="linux-database-engine-detail">
+                    <div className="linux-database-meta-grid">
+                        {renderDbMeta('版本', db.data.version || '-')}
+                        {renderDbMeta('状态', (
+                            <Tag color={db.data.status ? 'green' : 'default'}>
+                                {db.data.status || '已检测'}
+                            </Tag>
+                        ))}
+                        {db.type === 'mysql' && mysql.rootPwd && renderDbMeta('Root 密码', <Text code copyable>{mysql.rootPwd}</Text>)}
+                        {db.type === 'mysql' && mysql.datadir && renderDbMeta('数据目录', mysql.datadir)}
+                    </div>
+
+                    {db.type === 'mysql' && (
+                        <div className="linux-database-section-stack">
+                            <div className="linux-database-split">
+                                <section className="linux-database-panel">
+                                    <div className="linux-database-panel-head">
+                                        <Text strong>数据库列表</Text>
+                                        <Tag>{mysql.databases.length} 个</Tag>
+                                    </div>
+                                    <div className="linux-database-table linux-module-table">
+                                        <Table
+                                            dataSource={mysql.databases.map((name: string) => ({ key: name, name }))}
+                                            columns={[{ title: '名称', dataIndex: 'name', key: 'name' }]}
+                                            size="small"
+                                            pagination={false}
+                                            onRow={(record) => ({
+                                                onClick: () => exploreDatabase(record.name),
+                                                className: dbSelectedDb === record.name ? 'linux-database-row-selected' : '',
+                                            })}
+                                            scroll={{ y: 300 }}
+                                        />
+                                    </div>
+                                </section>
+
+                                <section className="linux-database-panel">
+                                    <div className="linux-database-panel-head">
+                                        <Text strong>{dbSelectedDb ? `表列表 - ${dbSelectedDb}` : '表列表'}</Text>
+                                        <Spin spinning={dbExplorerLoading} size="small" />
+                                    </div>
+                                    {!dbSelectedDb ? (
+                                        <div className="linux-database-empty-note">请选择数据库查看表</div>
+                                    ) : (
+                                        <div className="linux-database-table linux-module-table">
+                                            <Table
+                                                dataSource={dbTablesList.map((name: string) => ({ key: name, name }))}
+                                                columns={[{ title: '表名', dataIndex: 'name', key: 'name' }]}
+                                                size="small"
+                                                pagination={false}
+                                                onRow={(record) => ({
+                                                    onClick: () => exploreTable(dbSelectedDb, record.name),
+                                                    className: dbSelectedTable === record.name ? 'linux-database-row-selected' : '',
+                                                })}
+                                                scroll={{ y: 300 }}
+                                            />
+                                        </div>
+                                    )}
+                                </section>
+                            </div>
+
+                            {dbSelectedTable && (
+                                <section className="linux-database-panel">
+                                    <div className="linux-database-panel-head">
+                                        <Text strong>数据浏览: {dbSelectedTable}</Text>
+                                        <Space size={8}>
+                                            <Tag color="cyan">前 10 条数据</Tag>
+                                            <Spin spinning={dbExplorerLoading} size="small" />
+                                        </Space>
+                                    </div>
+                                    {dbTableData.length === 0 && dbColumnsList.length === 0 ? (
+                                        <div className="linux-database-empty-note">
+                                            无法获取表内容，可能是权限不足、数据库为空或需要 root 密码。
+                                        </div>
+                                    ) : (
+                                        <Tabs size="small" items={[
+                                            {
+                                                key: 'data',
+                                                label: '数据预览',
+                                                children: (
+                                                    <div className="linux-database-table linux-module-table">
+                                                        <Table
+                                                            dataSource={dbTableData}
+                                                            columns={dbTableData.length > 0 ? Object.keys(dbTableData[0]).filter(k => k !== 'key').map(k => ({
+                                                                title: k,
+                                                                dataIndex: k,
+                                                                key: k,
+                                                                ellipsis: true
+                                                            })) : []}
+                                                            size="small"
+                                                            scroll={{ x: 'max-content' }}
+                                                            locale={{ emptyText: '暂无数据或权限不足' }}
+                                                        />
+                                                    </div>
+                                                )
+                                            },
+                                            {
+                                                key: 'columns',
+                                                label: '结构',
+                                                children: (
+                                                    <div className="linux-database-table linux-module-table">
+                                                        <Table
+                                                            dataSource={dbColumnsList}
+                                                            columns={[
+                                                                { title: '字段', dataIndex: 'name', key: 'name' },
+                                                                { title: '类型', dataIndex: 'type', key: 'type' },
+                                                                { title: '为空', dataIndex: 'null', key: 'null' },
+                                                                { title: '键', dataIndex: 'key', key: 'key' },
+                                                                { title: '默认值', dataIndex: 'default', key: 'default' },
+                                                                { title: '额外', dataIndex: 'extra', key: 'extra' },
+                                                            ]}
+                                                            size="small"
+                                                            pagination={false}
+                                                            locale={{ emptyText: '无法获取表结构' }}
+                                                        />
+                                                    </div>
+                                                )
+                                            }
+                                        ]} />
+                                    )}
+                                </section>
+                            )}
+
+                            {mysql.users.length > 0 && (
+                                <section className="linux-database-panel">
+                                    <div className="linux-database-panel-head">
+                                        <Text strong>用户权限</Text>
+                                        <Tag>{mysql.users.length} 个账号</Tag>
+                                    </div>
+                                    <div className="linux-database-table linux-module-table">
+                                        <Table
+                                            dataSource={mysql.users}
+                                            columns={[
+                                                { title: '用户', dataIndex: 'user', key: 'user' },
+                                                { title: '主机', dataIndex: 'host', key: 'host' }
+                                            ]}
+                                            size="small"
+                                            pagination={false}
+                                        />
+                                    </div>
+                                </section>
+                            )}
+                        </div>
+                    )}
+
+                    {db.type === 'postgresql' && postgresql.databases.length > 0 && (
+                        <div className="linux-database-token-list">
+                            {postgresql.databases.map((name: string) => <Tag key={name}>{name}</Tag>)}
+                        </div>
+                    )}
+
+                    {db.type === 'redis' && redis.info && (
+                        <pre className="linux-database-pre">{redis.info}</pre>
+                    )}
+
+                    {db.type === 'mongodb' && mongodb.databases.length > 0 && (
+                        <div className="linux-database-token-list">
+                            {mongodb.databases.map((name: string) => <Tag key={name} color="green">{name}</Tag>)}
+                        </div>
+                    )}
+                </div>
+            )
+        }));
+
+        return (
+            <div className="linux-database-workbench">
+                <div className="linux-database-commandbar">
+                    <div className="linux-database-title">
+                        <Text className="linux-evidence-kicker">数据服务清单</Text>
+                        <Text strong className="linux-evidence-heading">数据库检测</Text>
+                    </div>
+                    <div className="linux-database-actions">
+                        <span className="linux-evidence-count">{detectedDbs.length} 个服务</span>
+                        <Text type="secondary" style={{ fontSize: 12 }}>原始输出</Text>
+                        <Switch size="small" checked={dbShowDebug} onChange={setDbShowDebug} />
+                    </div>
+                </div>
+
+                {dbShowDebug && (
+                    <details className="linux-database-debug" open>
+                        <summary>采集原始输出</summary>
+                        <pre>{rawOutput}</pre>
+                    </details>
+                )}
+
+                <div className="linux-database-engine-grid">
+                    {detectedDbs.map(db => (
+                        <div className="linux-database-engine-card" key={db.type}>
+                            <span className="linux-database-engine-name">{db.name}</span>
+                            <Tag color={db.data.status ? 'green' : 'default'}>
+                                {db.data.status || '已检测'}
+                            </Tag>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="linux-database-tabs">
+                    <Tabs items={modernTabItems} />
+                </div>
+            </div>
+        );
 
         const tabItems = detectedDbs.map(db => ({
             key: db.type,
@@ -11975,30 +12617,42 @@ export default function ModuleDetail({
 
     // 终端模块使用专用布局
     if (moduleKey === 'terminal') {
+        const terminalStatusLabel = terminalInteractiveMode
+            ? terminalSession
+                ? '已连接'
+                : executing
+                    ? '连接中'
+                    : '等待会话'
+            : '命令模式';
+        const terminalStatusClassName = terminalSession
+            ? 'linux-terminal-status linux-terminal-status-connected'
+            : 'linux-terminal-status';
+
         return (
-            <div className={`${workbenchShellClassName} linux-terminal-shell`} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div className={`${workbenchWorkspaceClassName} linux-terminal-workspace`} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' }}>
-                <div
-                    className={workbenchHeaderClassName}
-                    style={{ flexShrink: 0 }}
-                >
-                    <div className={workbenchTitlebarClassName} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Title className={workbenchTitleClassName} level={4} style={{ margin: 0 }}>{displayTitle}</Title>
-                        <Tag color={mode === 'local' ? 'blue' : 'green'}>{mode === 'local' ? '本地' : '远程'}</Tag>
-                        {mode === 'remote' && privilegeMode !== 'none' && <Tag color="orange">{privilegeMode}</Tag>}
+            <div className={`${workbenchShellClassName} linux-terminal-shell`}>
+                <div className={`${workbenchWorkspaceClassName} linux-terminal-workspace`}>
+                    <div className="linux-terminal-topbar">
+                        <div className="linux-terminal-identity">
+                            <span className={`linux-terminal-dot${terminalSession ? ' linux-terminal-dot-connected' : ''}`} />
+                            <span className="linux-terminal-name">SSH 交互终端</span>
+                            <span className={terminalStatusClassName}>{terminalStatusLabel}</span>
+                            {mode === 'remote' && privilegeMode !== 'none' && (
+                                <span className="linux-terminal-privilege">{privilegeMode}</span>
+                            )}
+                        </div>
                         <Button
                             type="text"
+                            size="small"
                             onClick={() => setTerminalOutput([])}
-                            title="清除终端"
-                            style={{ marginLeft: 'auto' }}
+                            title="清空终端输出"
+                            className="linux-terminal-action"
                         >
                             清除
                         </Button>
                     </div>
-                </div>
-                <div className={`${workbenchBodyClassName} linux-terminal-body`} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                    {renderTerminal()}
-                </div>
+                    <div className={`${workbenchBodyClassName} linux-terminal-body`}>
+                        {renderTerminal()}
+                    </div>
                 </div>
             </div>
         );

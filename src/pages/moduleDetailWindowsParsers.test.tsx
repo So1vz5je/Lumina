@@ -221,6 +221,70 @@ describe('ModuleDetail Windows security event rendering', () => {
   });
 });
 
+describe('ModuleDetail Windows timeline rendering', () => {
+  it('merges timeline rows from security, file, and persistence sources in newest-first order', async () => {
+    const { container } = renderLocalWindowsModule(
+      'windows_timeline',
+      JSON.stringify([
+        {
+          time: '2026-06-27 09:10:00',
+          category: 'File',
+          source: 'Recent webroot',
+          title: 'shell.aspx',
+          actor: 'IIS',
+          target: 'C:\\inetpub\\wwwroot\\shell.aspx',
+          risk: 'warning',
+          detail: 'Recently modified web file',
+        },
+        {
+          time: '2026-06-27 09:30:00',
+          category: 'Security',
+          source: 'Security 4625',
+          title: 'Failed logon',
+          actor: 'Administrator',
+          target: '10.0.0.8',
+          risk: 'high',
+          detail: 'Failed logon from 10.0.0.8',
+        },
+        {
+          time: '2026-06-27 09:20:00',
+          category: 'Persistence',
+          source: 'Scheduled Task',
+          title: 'UpdateCheck',
+          actor: 'SYSTEM',
+          target: 'powershell.exe -File C:\\ProgramData\\up.ps1',
+          risk: 'warning',
+          detail: 'Suspicious scheduled task action',
+        },
+      ]),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed logon')).toBeInTheDocument();
+      expect(screen.getByText('UpdateCheck')).toBeInTheDocument();
+      expect(screen.getByText('shell.aspx')).toBeInTheDocument();
+      expect(screen.getByText('Security 4625')).toBeInTheDocument();
+      expect(screen.getByText('Scheduled Task')).toBeInTheDocument();
+      expect(screen.getByText('Recent webroot')).toBeInTheDocument();
+    });
+
+    const bodyText = container.textContent ?? '';
+    expect(bodyText.indexOf('Failed logon')).toBeLessThan(bodyText.indexOf('UpdateCheck'));
+    expect(bodyText.indexOf('UpdateCheck')).toBeLessThan(bodyText.indexOf('shell.aspx'));
+    expect(screen.getAllByText('high').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('warning').length).toBeGreaterThan(0);
+  });
+
+  it('shows a diagnostic when the Windows timeline returns no rows', async () => {
+    renderLocalWindowsModule('windows_timeline', '[]');
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/windows_timeline/).length).toBeGreaterThan(0);
+      expect(screen.getByText(/Windows timeline/)).toBeInTheDocument();
+    });
+  });
+});
+
 describe('ModuleDetail Windows scheduled task rendering', () => {
   it('shows task path, action, trigger, and run status returned by Windows', async () => {
     invokeMock.mockImplementation(async (command: string) => {
@@ -334,6 +398,41 @@ describe('ModuleDetail Windows scheduled task rendering', () => {
       expect(screen.getByText('采集诊断')).toBeInTheDocument();
       expect(screen.getByText('采集失败')).toBeInTheDocument();
       expect(screen.getByText('Access is denied.')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('ModuleDetail Windows process anomaly rendering', () => {
+  it('shows Windows process parent, command line, owner, signature, and hash evidence', async () => {
+    renderLocalWindowsModule(
+      'process_anomaly',
+      JSON.stringify([
+        {
+          type: 'SENSITIVE_PATH',
+          pid: 4242,
+          ppid: 1000,
+          name: 'payload.exe',
+          user: 'DESKTOP\\analyst',
+          path: 'C:\\Users\\Public\\payload.exe',
+          command: 'C:\\Users\\Public\\payload.exe -k',
+          parent: 'explorer.exe',
+          signer: 'Unsigned',
+          sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          detail: 'Process runs from user-writable path',
+          severity: 'high',
+        },
+      ]),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('payload.exe')).toBeInTheDocument();
+      expect(screen.getByText('4242')).toBeInTheDocument();
+      expect(screen.getByText('1000')).toBeInTheDocument();
+      expect(screen.getByText('explorer.exe')).toBeInTheDocument();
+      expect(screen.getByText('DESKTOP\\analyst')).toBeInTheDocument();
+      expect(screen.getByText('Unsigned')).toBeInTheDocument();
+      expect(screen.getByText('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')).toBeInTheDocument();
+      expect(screen.getByText('C:\\Users\\Public\\payload.exe -k')).toBeInTheDocument();
     });
   });
 });
