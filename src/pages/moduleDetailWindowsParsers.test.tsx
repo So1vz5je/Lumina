@@ -1088,7 +1088,7 @@ describe('ModuleDetail Windows security module rendering', () => {
     });
   });
 
-  it('renders the refactored Windows panel detection workspace with installs, sites, services, logs, and diagnostics', async () => {
+  it('renders the refactored Windows panel detection workspace without duplicate service or diagnostics sections', async () => {
     renderLocalWindowsModule(
       'panel',
       [
@@ -1101,16 +1101,20 @@ describe('ModuleDetail Windows security module rendering', () => {
         '===LOGS===',
         JSON.stringify([{ Source: 'phpstudy', Path: 'C:\\phpstudy_pro\\COM\\log\\phpstudy.log', Length: 2048, LastWriteTime: '2026-06-25T20:00:00', Note: 'phpStudy log' }]),
         '===DIAGNOSTICS===',
-        JSON.stringify(['IIS WebAdministration module is unavailable']),
+        JSON.stringify(['Everything ES.exe: C:\\app\\bin\\everything\\es.exe', 'IIS WebAdministration module is unavailable']),
       ].join('\n'),
     );
 
     expect(await screen.findByText('PhpStudy Pro')).toBeInTheDocument();
     expect(screen.getByText('C:\\phpstudy_pro')).toBeInTheDocument();
     expect(screen.getByText('Default Web Site')).toBeInTheDocument();
-    expect(screen.getAllByText('Apache2.4').length).toBeGreaterThan(0);
     expect(screen.getByText('C:\\phpstudy_pro\\COM\\log\\phpstudy.log')).toBeInTheDocument();
-    expect(screen.getByText('IIS WebAdministration module is unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('已发现')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /服务/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /诊断/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('Apache2.4')).not.toBeInTheDocument();
+    expect(screen.queryByText('IIS WebAdministration module is unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText('Everything ES.exe: C:\\app\\bin\\everything\\es.exe')).not.toBeInTheDocument();
   });
 
   it('renders a deliberate Windows panel empty state when no panel is detected', async () => {
@@ -1132,6 +1136,116 @@ describe('ModuleDetail Windows security module rendering', () => {
 
     expect(await screen.findByText('未发现常见 Windows Web 面板')).toBeInTheDocument();
     expect(screen.getAllByText(/BaoTa Windows/).length).toBeGreaterThan(0);
+  });
+
+  it('runs Docker read-only container checks through the local command bridge', async () => {
+    const executedCommands: string[] = [];
+    invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
+      if (command === 'execute_local_command') {
+        executedCommands.push(args?.command || '');
+        if (args?.command?.includes('docker exec')) {
+          return { success: true, stdout: 'PID USER COMMAND\n1 root nginx', stderr: '' };
+        }
+
+        return {
+          success: true,
+          stdout: [
+            '===DOCKER_INSTALL===',
+            JSON.stringify([{ CommandPath: 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe', Version: '26.1.0' }]),
+            '===DOCKER_SERVICE===',
+            '[]',
+            '===DOCKER_CONTAINERS===',
+            JSON.stringify([{ ID: 'abc123def456', Image: 'nginx:stable', Status: 'Up 2 hours', Names: 'web', Ports: '0.0.0.0:8080->80/tcp' }]),
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="docker"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    expect(await screen.findByText('nginx:stable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /分析 web/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /进程/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/PID USER COMMAND/)).toBeInTheDocument();
+    });
+    expect(executedCommands.some((cmd) => (
+      cmd.includes('docker exec')
+        && cmd.includes('abc123def456')
+        && cmd.includes('ps')
+    ))).toBe(true);
+  });
+
+  it('requires confirmation before running an advanced Docker container command', async () => {
+    const executedCommands: string[] = [];
+    invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
+      if (command === 'execute_local_command') {
+        executedCommands.push(args?.command || '');
+        if (args?.command?.includes('docker exec')) {
+          return { success: true, stdout: 'uid=0(root)', stderr: '' };
+        }
+
+        return {
+          success: true,
+          stdout: [
+            '===DOCKER_INSTALL===',
+            JSON.stringify([{ CommandPath: 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe', Version: '26.1.0' }]),
+            '===DOCKER_SERVICE===',
+            '[]',
+            '===DOCKER_CONTAINERS===',
+            JSON.stringify([{ ID: 'abc123def456', Image: 'nginx:stable', Status: 'Up 2 hours', Names: 'web', Ports: '80/tcp' }]),
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="docker"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    expect(await screen.findByText('nginx:stable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /分析 web/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /高级执行/ }));
+    fireEvent.change(await screen.findByLabelText('容器命令'), {
+      target: { value: 'id' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /执行命令/ }));
+
+    expect(executedCommands.filter((cmd) => cmd.includes('docker exec'))).toHaveLength(0);
+
+    fireEvent.click(await screen.findByRole('button', { name: /确认执行/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('uid=0(root)')).toBeInTheDocument();
+    });
+    expect(executedCommands.some((cmd) => cmd.includes('docker exec') && cmd.includes('id'))).toBe(true);
   });
 
   it('runs a bounded Windows webshell scan and renders Windows path hits', async () => {

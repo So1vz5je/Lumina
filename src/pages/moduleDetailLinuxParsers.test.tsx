@@ -8,7 +8,7 @@ import ModuleDetail from './ModuleDetail';
 
 const { invokeMock, listenMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
-  listenMock: vi.fn(async () => vi.fn()),
+  listenMock: vi.fn(async (..._args: unknown[]) => vi.fn()),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -17,6 +17,53 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: listenMock,
+}));
+
+vi.mock('@xterm/xterm', () => {
+  const stripTerminalControlSequences = (value: string) =>
+    value
+      .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][A-Za-z0-9]|\x1B[@-Z\\-_]/g, '')
+      .replace(/\x07/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n');
+
+  class TerminalMock {
+    private element: HTMLElement | null = null;
+
+    loadAddon() {}
+
+    open(element: HTMLElement) {
+      this.element = element;
+      this.element.textContent = '';
+      this.element.classList.add('xterm');
+    }
+
+    write(data: string) {
+      if (this.element) {
+        this.element.textContent = `${this.element.textContent ?? ''}${stripTerminalControlSequences(data)}`;
+      }
+    }
+
+    writeln(data: string) {
+      this.write(`${data}\n`);
+    }
+
+    onData() {
+      return { dispose: vi.fn() };
+    }
+
+    focus() {}
+
+    dispose() {}
+  }
+
+  return { Terminal: TerminalMock };
+});
+
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class FitAddonMock {
+    fit() {}
+  },
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -62,6 +109,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+  delete (window as Window & { __luminaRemoteTerminalSession?: unknown }).__luminaRemoteTerminalSession;
   invokeMock.mockReset();
   listenMock.mockReset();
   listenMock.mockImplementation(async () => vi.fn());
@@ -69,6 +117,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  delete (window as Window & { __luminaRemoteTerminalSession?: unknown }).__luminaRemoteTerminalSession;
 });
 
 function renderRemoteModule(moduleKey: string, stdout: string, options: { isDarkMode?: boolean } = {}) {
@@ -543,7 +592,7 @@ describe('ModuleDetail Linux remote module rendering', () => {
       expect(invokeMock).toHaveBeenCalledWith('remote_open_active_terminal_session', {
         title: 'analysis-shell',
         cols: 120,
-        rows: 34,
+        rows: 48,
       });
     });
     expect(invokeMock).not.toHaveBeenCalledWith('ssh_execute', expect.anything());
@@ -582,6 +631,188 @@ describe('ModuleDetail Linux remote module rendering', () => {
     expect(terminal).toBeInTheDocument();
     expect(terminal).toHaveClass('linux-remote-terminal-light');
     expect(terminal).not.toHaveStyle({ background: '#0c0c0c' });
+  });
+
+  it('keeps the interactive terminal session alive across terminal page remounts', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'remote_open_active_terminal_session') {
+        return {
+          id: 'term-1',
+          connectionId: 'conn-1',
+          title: 'analysis-shell',
+          cwd: '~',
+        };
+      }
+      if (command === 'remote_close_terminal_session') return null;
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const firstRender = render(
+      <ModuleDetail
+        moduleKey="terminal"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('remote_open_active_terminal_session', {
+        title: 'analysis-shell',
+        cols: 120,
+        rows: 48,
+      });
+    });
+
+    firstRender.unmount();
+
+    render(
+      <ModuleDetail
+        moduleKey="terminal"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('已恢复远程终端会话。')).toBeInTheDocument());
+
+    const openCalls = invokeMock.mock.calls.filter(([command]) => command === 'remote_open_active_terminal_session');
+    const closeCalls = invokeMock.mock.calls.filter(([command]) => command === 'remote_close_terminal_session');
+    expect(openCalls).toHaveLength(1);
+    expect(closeCalls).toHaveLength(0);
+  });
+
+  it('keeps the remote Linux file manager inside a dark themed surface', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
+      if (command === 'ssh_execute') {
+        if (args?.command?.includes('test -d')) {
+          return { success: true, stdout: 'EXISTS\n', stderr: '' };
+        }
+        if (args?.command?.includes('ls -la')) {
+          return {
+            success: true,
+            stdout: '-rw-r--r-- 1 root root 42 2026-06-27 10:00 app.log\n',
+            stderr: '',
+          };
+        }
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const { container } = render(
+      <ModuleDetail
+        moduleKey="file_manager"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('ssh_execute', expect.anything()));
+    expect(container.querySelector('.linux-file-manager-dark')).toBeInTheDocument();
+    expect(container.querySelector('.linux-file-manager-header')).toBeInTheDocument();
+    expect(container.querySelector('.linux-file-manager-list')).toBeInTheDocument();
+    expect(container.querySelector('.linux-file-manager-table')).toBeInTheDocument();
+  });
+
+  it('uses the Linux workbench shell for the remote terminal page', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'remote_open_active_terminal_session') {
+        return {
+          id: 'term-1',
+          connectionId: 'conn-1',
+          title: 'analysis-shell',
+          cwd: '~',
+        };
+      }
+      if (command === 'remote_close_terminal_session') return null;
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const { container } = render(
+      <ModuleDetail
+        moduleKey="terminal"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('remote_open_active_terminal_session', expect.anything()));
+    expect(container.querySelector('.linux-module-shell')).toBeInTheDocument();
+    expect(container.querySelector('.linux-module-header')).toBeInTheDocument();
+    expect(container.querySelector('.linux-module-body')).toBeInTheDocument();
+  });
+
+  it('renders terminal stream control sequences instead of exposing raw ANSI text', async () => {
+    const listeners = new Map<string, (event: { payload: unknown }) => void>();
+
+    listenMock.mockImplementation(async (...args: unknown[]) => {
+      const [eventName, callback] = args as [string, (event: { payload: unknown }) => void];
+      listeners.set(eventName, callback);
+      return vi.fn();
+    });
+
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'remote_open_active_terminal_session') {
+        return {
+          id: 'term-1',
+          connectionId: 'conn-1',
+          title: 'analysis-shell',
+          cwd: '~',
+        };
+      }
+      if (command === 'remote_close_terminal_session') return null;
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const { container } = render(
+      <ModuleDetail
+        moduleKey="terminal"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => expect(listeners.has('remote://terminal-stream')).toBe(true));
+
+    listeners.get('remote://terminal-stream')?.({
+      payload: {
+        sessionId: 'term-1',
+        connectionId: 'conn-1',
+        data: '\x1b[?2004h\x1b[01;34mblue-dir\x1b[0m\r\n',
+      },
+    });
+
+    await waitFor(() => expect(container.textContent).toContain('blue-dir'));
+    expect(container.textContent).not.toContain('[?2004h');
+    expect(container.textContent).not.toContain('[01;34m');
   });
 
   it('shows SSH key filenames, types, owners, and full paths consistently', async () => {

@@ -1,17 +1,14 @@
-import { Alert, Empty, Table, Tabs, Tag, Typography } from 'antd';
+import { Empty, Table, Tabs, Tag, Typography } from 'antd';
 import {
   ControlOutlined,
   FileTextOutlined,
   GlobalOutlined,
-  HddOutlined,
-  ToolOutlined,
 } from '@ant-design/icons';
 import {
   normalizeWindowsPanelDetection,
   type WindowsPanelDetectionData,
   type WindowsPanelInstall,
   type WindowsPanelLog,
-  type WindowsPanelService,
   type WindowsPanelSite,
 } from '../../modules/windowsPanel/detection';
 
@@ -40,7 +37,6 @@ function hasFindings(model: WindowsPanelDetectionData) {
   return model.detectedInstalls.length > 0
     || model.sites.length > 0
     || model.iisSites.length > 0
-    || model.services.length > 0
     || model.logs.length > 0;
 }
 
@@ -60,23 +56,15 @@ export default function WindowsPanelDetectionView({ data, isDarkMode = false }: 
       dataIndex: 'name',
       key: 'name',
       width: 180,
-      render: (value: string, row: WindowsPanelInstall) => (
+      render: (value: string) => (
         <span className="windows-panel-name">
           <Text strong>{value}</Text>
-          <Tag color={row.detected ? 'green' : 'default'}>{row.detected ? '已发现' : '未发现'}</Tag>
         </span>
       ),
     },
     { title: '类型', dataIndex: 'panelType', key: 'panelType', width: 140 },
     { title: '安装路径', dataIndex: 'path', key: 'path', render: renderPath },
     { title: '站点根目录', dataIndex: 'siteRoot', key: 'siteRoot', render: renderPath },
-    {
-      title: '服务状态',
-      dataIndex: 'serviceState',
-      key: 'serviceState',
-      width: 110,
-      render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag>,
-    },
     { title: '站点数', dataIndex: 'siteCount', key: 'siteCount', width: 90 },
     { title: '证据', dataIndex: 'evidence', key: 'evidence', ellipsis: true },
     { title: '备注', dataIndex: 'notes', key: 'notes', ellipsis: true },
@@ -110,21 +98,6 @@ export default function WindowsPanelDetectionView({ data, isDarkMode = false }: 
     { title: '所属面板', dataIndex: 'ownerPanel', key: 'ownerPanel', width: 150 },
     { title: '大小', dataIndex: 'sizeText', key: 'sizeText', width: 90 },
     { title: '最后修改', dataIndex: 'lastModified', key: 'lastModified', width: 160 },
-  ];
-
-  const serviceColumns = [
-    { title: '服务名', dataIndex: 'name', key: 'name', width: 160, render: (value: string) => <Text strong>{value}</Text> },
-    { title: '显示名', dataIndex: 'displayName', key: 'displayName', width: 220 },
-    {
-      title: '状态',
-      dataIndex: 'state',
-      key: 'state',
-      width: 100,
-      render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag>,
-    },
-    { title: '启动模式', dataIndex: 'startMode', key: 'startMode', width: 110 },
-    { title: 'PID', dataIndex: 'pid', key: 'pid', width: 90 },
-    { title: '路径', dataIndex: 'path', key: 'path', render: renderPath },
   ];
 
   const logColumns = [
@@ -169,22 +142,6 @@ export default function WindowsPanelDetectionView({ data, isDarkMode = false }: 
       ),
     },
     {
-      key: 'services',
-      label: `服务 (${model.services.length})`,
-      forceRender: true,
-      children: (
-        <Table<WindowsPanelService>
-          rowKey="key"
-          size="small"
-          pagination={false}
-          dataSource={model.services}
-          columns={serviceColumns}
-          scroll={{ x: 950 }}
-          locale={{ emptyText: '未发现相关 Windows 服务' }}
-        />
-      ),
-    },
-    {
       key: 'logs',
       label: `日志/配置 (${model.logs.length})`,
       forceRender: true,
@@ -199,18 +156,6 @@ export default function WindowsPanelDetectionView({ data, isDarkMode = false }: 
           locale={{ emptyText: '未发现日志或配置文件线索' }}
         />
       ),
-    },
-    {
-      key: 'diagnostics',
-      label: `诊断 (${model.diagnostics.length})`,
-      forceRender: true,
-      children: model.diagnostics.length > 0 ? (
-        <div className="windows-panel-diagnostics">
-          {model.diagnostics.map((item, index) => (
-            <Alert key={`${item}-${index}`} type="info" showIcon message={item} />
-          ))}
-        </div>
-      ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无采集诊断" />,
     },
   ];
 
@@ -228,19 +173,9 @@ export default function WindowsPanelDetectionView({ data, isDarkMode = false }: 
           <strong>{model.statistics.siteCount || allSites.length}</strong>
         </div>
         <div className="windows-panel-summary-item">
-          <ToolOutlined />
-          <span>服务</span>
-          <strong>{model.statistics.serviceCount}</strong>
-        </div>
-        <div className="windows-panel-summary-item">
           <FileTextOutlined />
           <span>日志</span>
           <strong>{model.statistics.logCount}</strong>
-        </div>
-        <div className="windows-panel-summary-item">
-          <HddOutlined />
-          <span>诊断</span>
-          <strong>{model.statistics.diagnosticCount}</strong>
         </div>
       </div>
 
@@ -256,18 +191,11 @@ export default function WindowsPanelDetectionView({ data, isDarkMode = false }: 
               </span>
             }
           />
-          {model.diagnostics.length > 0 && (
-            <div className="windows-panel-empty-diagnostics">
-              {model.diagnostics.map((item, index) => (
-                <Tag key={`${item}-${index}`} color="blue">{item}</Tag>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
       <div className="windows-panel-table-shell">
-        <Tabs items={tabItems} defaultActiveKey={detected ? 'installs' : 'diagnostics'} size="small" />
+        <Tabs items={tabItems} defaultActiveKey="installs" size="small" />
       </div>
     </div>
   );

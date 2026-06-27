@@ -219,4 +219,40 @@ describe('Windows panel detection model', () => {
     );
     expect(data.statistics.detectedPanelCount).toBe(1);
   });
+
+  it('deduplicates structured and Everything-derived panel rows by path', () => {
+    const data = parseWindowsPanelSections([
+      '===PANELS===',
+      JSON.stringify([{ PanelType: 'phpstudy', Name: 'PhpStudy Pro', Path: 'D:\\webstack\\phpstudy_pro', SiteRoot: 'D:\\webstack\\phpstudy_pro\\WWW', Detected: true, Evidence: 'path', Notes: 'path exists' }]),
+      '===SITES===',
+      JSON.stringify([{ Source: 'phpstudy', Name: 'demo.local', Path: 'D:\\webstack\\phpstudy_pro\\WWW\\demo.local', OwnerPanel: 'PhpStudy Pro' }]),
+      '===LOGS===',
+      JSON.stringify([{ Source: 'phpstudy', Path: 'D:\\webstack\\phpstudy_pro\\COM\\log\\phpstudy.log', Length: 2048 }]),
+      '===ES_MATCHES===',
+      JSON.stringify([
+        {
+          Source: 'everything',
+          Query: 'phpstudy_pro',
+          FullPath: 'D:\\webstack\\phpstudy_pro\\WWW\\demo.local\\index.php',
+          Name: 'index.php',
+          ParentPath: 'D:\\webstack\\phpstudy_pro\\WWW\\demo.local',
+          Extension: 'php',
+        },
+        {
+          Source: 'everything',
+          Query: 'phpstudy_pro',
+          FullPath: 'D:\\webstack\\phpstudy_pro\\COM\\log\\phpstudy.log',
+          Name: 'phpstudy.log',
+          ParentPath: 'D:\\webstack\\phpstudy_pro\\COM\\log',
+          Extension: 'log',
+          Length: 2048,
+        },
+      ]),
+    ].join('\n'));
+
+    expect(data.installs.filter((install) => install.path === 'D:\\webstack\\phpstudy_pro')).toHaveLength(1);
+    expect(data.detectedInstalls.filter((install) => install.path === 'D:\\webstack\\phpstudy_pro')).toHaveLength(1);
+    expect(data.sites.filter((site) => site.path === 'D:\\webstack\\phpstudy_pro\\WWW\\demo.local')).toHaveLength(1);
+    expect(data.logs.filter((log) => log.path === 'D:\\webstack\\phpstudy_pro\\COM\\log\\phpstudy.log')).toHaveLength(1);
+  });
 });

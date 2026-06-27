@@ -3462,6 +3462,291 @@ body {
   background: transparent !important;
 }
 
+.analysis-workbench .analysis-content.linux-remote-content > .analysis-module-view[data-module-key="terminal"] {
+  height: 100%;
+  min-height: 0;
+  background: #edf4f2 !important;
+}
+
+.analysis-workbench.dark .analysis-content.linux-remote-content > .analysis-module-view[data-module-key="terminal"] {
+  background: #071012 !important;
+}
+
+.analysis-workbench .linux-terminal-shell,
+.analysis-workbench .linux-terminal-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #edf4f2 !important;
+}
+
+.analysis-workbench.dark .linux-terminal-shell,
+.analysis-workbench.dark .linux-terminal-workspace {
+  background: #071012 !important;
+}
+
+.analysis-workbench .linux-terminal-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 20px 20px !important;
+  background: #edf4f2 !important;
+}
+
+.analysis-workbench.dark .linux-terminal-body {
+  background: #071012 !important;
+}
+
+.analysis-workbench .linux-remote-terminal {
+  flex: 1 1 auto;
+  height: 100% !important;
+  min-height: 0;
+  border-radius: 6px !important;
+}
+
+.analysis-workbench .linux-remote-terminal-light {
+  border: 1px solid rgba(20, 83, 45, 0.12) !important;
+  background: #f8fcfa !important;
+  box-shadow: none !important;
+}
+
+.analysis-workbench .linux-remote-terminal-dark {
+  border: 1px solid rgba(94, 234, 212, 0.12) !important;
+  background: #091113 !important;
+  box-shadow: none !important;
+}
+
+.analysis-workbench .linux-xterm-host {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+.analysis-workbench .linux-xterm-host .xterm {
+  height: 100%;
+  padding: 2px 0;
+}
+
+.analysis-workbench .linux-xterm-host .xterm-viewport,
+.analysis-workbench .linux-xterm-host .xterm-screen {
+  background: transparent !important;
+}
+
+.analysis-workbench .linux-file-manager {
+  background: #edf4f2;
+  color: #16312b;
+}
+
+.analysis-workbench.dark .linux-file-manager {
+  background: #071012;
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-file-manager-header {
+  padding: 22px 28px 14px !important;
+  margin-bottom: 0 !important;
+  border-bottom: 1px solid rgba(20, 83, 45, 0.10);
+  background: linear-gradient(180deg, rgba(244, 251, 248, 0.96), rgba(244, 247, 251, 0.88));
+}
+
+.analysis-workbench.dark .linux-file-manager-header {
+  border-bottom-color: rgba(94, 234, 212, 0.10);
+  background: linear-gradient(180deg, rgba(13, 21, 24, 0.98), rgba(15, 24, 32, 0.92));
+}
+
+.analysis-workbench .linux-file-manager-titlebar .ant-typography {
+  color: #103127 !important;
+}
+
+.analysis-workbench.dark .linux-file-manager-titlebar .ant-typography {
+  color: #ecfdf5 !important;
+}
+
+.analysis-workbench .linux-file-manager-actions .ant-btn,
+.analysis-workbench .linux-file-manager-header .ant-btn {
+  border-radius: 6px !important;
+}
+
+.analysis-workbench.dark .linux-file-manager-actions .ant-btn,
+.analysis-workbench.dark .linux-file-manager-header .ant-btn {
+  border-color: rgba(94, 234, 212, 0.16) !important;
+  background: rgba(15, 24, 32, 0.84) !important;
+  color: #c6ddd6 !important;
+}
+
+.analysis-workbench.dark .linux-file-manager-actions .ant-btn:hover,
+.analysis-workbench.dark .linux-file-manager-header .ant-btn:hover {
+  border-color: rgba(94, 234, 212, 0.32) !important;
+  background: rgba(45, 212, 191, 0.10) !important;
+  color: #5eead4 !important;
+}
+
+.analysis-workbench .linux-file-manager-pathbar {
+  border: 1px solid rgba(20, 83, 45, 0.10);
+  background: rgba(255, 255, 255, 0.74) !important;
+  color: #35564b;
+}
+
+.analysis-workbench.dark .linux-file-manager-pathbar {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: rgba(7, 16, 18, 0.92) !important;
+  color: #c6ddd6;
+}
+
+.analysis-workbench.dark .linux-file-manager-path-input .ant-input,
+.analysis-workbench.dark .linux-file-manager-path-input {
+  border-color: rgba(94, 234, 212, 0.16) !important;
+  background: #0b1518 !important;
+  color: #d8e8e2 !important;
+}
+
+.analysis-workbench .linux-file-manager-list {
+  padding: 18px 28px 28px;
+  background: #edf4f2;
+}
+
+.analysis-workbench.dark .linux-file-manager-list {
+  background: #071012;
+}
+
+.analysis-workbench .linux-file-manager-up {
+  border: 1px solid rgba(20, 83, 45, 0.10);
+  background: rgba(255, 255, 255, 0.74) !important;
+  color: #35564b;
+}
+
+.analysis-workbench.dark .linux-file-manager-up {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: #0b1518 !important;
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-file-manager-table .ant-table {
+  border: 1px solid rgba(20, 83, 45, 0.12);
+  border-radius: 6px;
+  background: #f8fcfa !important;
+}
+
+.analysis-workbench.dark .linux-file-manager-table .ant-table {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: #0b1518 !important;
+  color: #d8e8e2 !important;
+}
+
+.analysis-workbench.dark .linux-file-manager-table .ant-table-thead > tr > th {
+  border-bottom-color: rgba(94, 234, 212, 0.12) !important;
+  background: #101b20 !important;
+  color: #b8d4cd !important;
+}
+
+.analysis-workbench.dark .linux-file-manager-table .ant-table-tbody > tr > td {
+  border-bottom-color: rgba(94, 234, 212, 0.08) !important;
+  background: #0b1518 !important;
+  color: #d8e8e2 !important;
+}
+
+.analysis-workbench.dark .linux-file-manager-table .ant-table-tbody > tr:hover > td {
+  background: #102226 !important;
+}
+
+.analysis-workbench.dark .linux-file-manager-table .ant-pagination,
+.analysis-workbench.dark .linux-file-manager-table .ant-pagination .ant-pagination-item a,
+.analysis-workbench.dark .linux-file-manager-table .ant-pagination .ant-pagination-total-text {
+  color: #c6ddd6 !important;
+}
+
+.analysis-workbench .linux-config-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.analysis-workbench .linux-config-summary,
+.analysis-workbench .linux-config-section {
+  border: 1px solid rgba(20, 83, 45, 0.12);
+  border-radius: 6px;
+  background: #f8fcfa;
+}
+
+.analysis-workbench.dark .linux-config-summary,
+.analysis-workbench.dark .linux-config-section {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: #0b1518;
+}
+
+.analysis-workbench .linux-config-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.analysis-workbench .linux-config-kicker {
+  display: block;
+  margin-bottom: 2px;
+  color: #60756f;
+  font-size: 12px;
+}
+
+.analysis-workbench.dark .linux-config-kicker {
+  color: #8aa39b;
+}
+
+.analysis-workbench .linux-config-title {
+  display: block;
+  color: #103127;
+  font-size: 15px;
+}
+
+.analysis-workbench.dark .linux-config-title {
+  color: #ecfdf5;
+}
+
+.analysis-workbench .linux-config-section {
+  overflow: hidden;
+}
+
+.analysis-workbench .linux-config-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(20, 83, 45, 0.10);
+  background: #eef7f3;
+}
+
+.analysis-workbench.dark .linux-config-section-head {
+  border-bottom-color: rgba(94, 234, 212, 0.10);
+  background: #101b20;
+}
+
+.analysis-workbench.dark .linux-config-section-head .ant-typography {
+  color: #d8e8e2;
+}
+
+.analysis-workbench .linux-config-pre {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px 14px;
+  background: #ffffff;
+  color: #16312b;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.analysis-workbench.dark .linux-config-pre {
+  background: #071012;
+  color: #d8e8e2;
+}
+
 .analysis-workbench .windows-module-body {
   padding: 0 30px 28px !important;
   background: #ffffff !important;

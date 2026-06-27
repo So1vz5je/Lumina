@@ -433,6 +433,21 @@ function appendUniqueRecord(records: DetailRecord[], key: string, row: DetailRec
   records.push(row);
 }
 
+function dedupeDetailRecordsByPath(records: DetailRecord[], pathKeys: string[]): DetailRecord[] {
+  const seen = new Set<string>();
+
+  return records.filter((record) => {
+    const path = readString(record, pathKeys, '');
+    if (!path || path === '-') return true;
+
+    const normalized = normalizeWindowsPath(path).toLowerCase();
+    if (seen.has(normalized)) return false;
+
+    seen.add(normalized);
+    return true;
+  });
+}
+
 function deriveEverythingDetails(rows: DetailRecord[]): {
   installs: DetailRecord[];
   sites: DetailRecord[];
@@ -610,19 +625,19 @@ export function parseWindowsPanelSections(output: string): WindowsPanelDetection
 
   const panelRows = parseJsonRecords(sections.PANELS || '');
   const everythingDetails = deriveEverythingDetails(parseJsonRecords(sections.ES_MATCHES || ''));
-  const installs = [...panelRows, ...everythingDetails.installs];
-  const detectedInstalls = [
+  const installs = dedupeDetailRecordsByPath([...panelRows, ...everythingDetails.installs], ['Path', 'path']);
+  const detectedInstalls = dedupeDetailRecordsByPath([
     ...panelRows.filter((panel) => readBool(panel, ['Detected', 'detected'])),
     ...everythingDetails.installs,
-  ];
-  const sites = [
+  ], ['Path', 'path']);
+  const sites = dedupeDetailRecordsByPath([
     ...parseJsonRecords(sections.SITES || ''),
     ...everythingDetails.sites,
-  ];
-  const logs = [
+  ], ['Path', 'path']);
+  const logs = dedupeDetailRecordsByPath([
     ...parseJsonRecords(sections.LOGS || ''),
     ...everythingDetails.logs,
-  ];
+  ], ['Path', 'path']);
 
   return normalizeWindowsPanelDetection({
     installs,

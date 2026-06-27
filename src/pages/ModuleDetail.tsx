@@ -2,12 +2,15 @@ import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Card, Row, Col, Progress, Typography, Descriptions, Spin, Table, Tag, List, Input, Button, Space, Statistic, Checkbox, Popover, Dropdown, Modal, Select, Upload, message, Empty, Tabs, Switch, Alert, Collapse, Pagination } from 'antd';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
 import { ReloadOutlined, UserOutlined, ApiOutlined, DatabaseOutlined, DesktopOutlined, SettingOutlined, DownloadOutlined, EyeOutlined, NumberOutlined, UploadOutlined, MoreOutlined, SearchOutlined, FileSearchOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile, exists } from '@tauri-apps/plugin-fs';
 import { join } from '@tauri-apps/api/path';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import type { MenuProps } from 'antd';
+import '@xterm/xterm/css/xterm.css';
 import WindowsDatabaseWorkbench from '../components/windows/WindowsDatabaseWorkbench';
 import WindowsPanelDetectionView from '../components/windows/WindowsPanelDetectionView';
 import { parseWindowsPanelSections } from '../modules/windowsPanel/detection';
@@ -40,6 +43,12 @@ interface RemoteTerminalErrorEvent {
     sessionId: string;
     error: string;
 }
+
+interface LuminaTerminalWindow extends Window {
+    __luminaRemoteTerminalSession?: RemoteInteractiveTerminalSession | null;
+}
+
+const getLuminaTerminalWindow = () => window as LuminaTerminalWindow;
 
 const { Title, Text } = Typography;
 
@@ -163,6 +172,8 @@ const EVERYTHING_LIVE_MAX_RESULTS = 50;
 const MIN_EVERYTHING_LIVE_QUERY_LENGTH = 2;
 const TERMINAL_HISTORY_LIMIT = 300;
 const TERMINAL_OUTPUT_MAX_CHARS = 60_000;
+const TERMINAL_CONTROL_SEQUENCE_PATTERN =
+    /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B\[[0-?]*[ -/]*[@-~]|\x1B[()][A-Za-z0-9]|\x1B[@-Z\\-_]/g;
 const EVERYTHING_HASH_ALGORITHMS = [
     { label: 'MD5', value: 'md5' },
     { label: 'SHA1', value: 'sha1' },
@@ -1332,6 +1343,15 @@ function buildWindowsPreviewHexCommand(path: string): string {
     return `$ErrorActionPreference='Stop'; $path=${quotePowerShellLiteral(path)}; $stream=[IO.File]::OpenRead($path); try { $buffer=New-Object byte[] 65536; $read=$stream.Read($buffer,0,$buffer.Length); if ($read -le 0) { '' } else { -join ($buffer[0..($read-1)] | ForEach-Object { $_.ToString('x2') }) } } finally { $stream.Dispose() }`;
 }
 
+function quoteDockerArg(value: string): string {
+    return `"${String(value).replace(/(["\\$`])/g, '\\$1')}"`;
+}
+
+function buildDockerShellCommand(containerId: string, command: string): string {
+    const fallback = `if command -v sh >/dev/null 2>&1; then sh -lc ${quoteDockerArg(command)}; elif command -v bash >/dev/null 2>&1; then bash -lc ${quoteDockerArg(command)}; elif command -v ash >/dev/null 2>&1; then ash -lc ${quoteDockerArg(command)}; else echo "No supported shell found in container"; exit 127; fi`;
+    return `docker exec ${quoteDockerArg(containerId)} sh -lc ${quoteDockerArg(fallback)} 2>&1`;
+}
+
 function buildWindowsWebshellScanCommand(customRoots = ''): string {
     const customWindowsRoots = customRoots
         .split(/\s+/)
@@ -2028,10 +2048,13 @@ export default function ModuleDetail({
     const [terminalInput, setTerminalInput] = useState('');
     const [executing, setExecuting] = useState(false);
     const [terminalSession, setTerminalSession] = useState<RemoteInteractiveTerminalSession | null>(null);
+    const [terminalInteractiveMode, setTerminalInteractiveMode] = useState(false);
     const [terminalUser, setTerminalUser] = useState('user');
     const [terminalHost, setTerminalHost] = useState('host');
     const [terminalPath, setTerminalPath] = useState('~');
     const terminalRef = useRef<HTMLDivElement>(null);
+    const xtermContainerRef = useRef<HTMLDivElement>(null);
+    const xtermRef = useRef<Terminal | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const terminalSessionRef = useRef<RemoteInteractiveTerminalSession | null>(null);
 
@@ -2072,6 +2095,11 @@ export default function ModuleDetail({
     const [dockerFileBrowserOpen, setDockerFileBrowserOpen] = useState(false);
     const [dockerFilePath, setDockerFilePath] = useState('/');
     const [dockerFileList, setDockerFileList] = useState<any[]>([]);
+    const [dockerCommandOpen, setDockerCommandOpen] = useState(false);
+    const [dockerCommandMode, setDockerCommandMode] = useState<'readonly' | 'advanced'>('readonly');
+    const [dockerCommandOutput, setDockerCommandOutput] = useState('');
+    const [dockerCommandInput, setDockerCommandInput] = useState('');
+    const [dockerCommandRunning, setDockerCommandRunning] = useState(false);
 
     // 扫描配置状态
     const [scanConfigOpen, setScanConfigOpen] = useState(false);
@@ -2095,7 +2123,110 @@ export default function ModuleDetail({
         }
     }, [terminalOutput, moduleKey]);
 
-    // 初始化终端 - 使用持久交互式 SSH shell，避免每条命令阻塞执行
+    useEffect(() => {
+        if (moduleKey !== 'terminal' || mode !== 'remote' || !terminalInteractiveMode || !xtermContainerRef.current) {
+            return;
+        }
+
+        const terminal = new Terminal({
+            theme: isDarkMode ? {
+                background: '#091113',
+                foreground: '#d8e8e2',
+                cursor: '#5eead4',
+                cursorAccent: '#071012',
+                selectionBackground: '#1f4f55',
+                black: '#071012',
+                red: '#f87171',
+                green: '#34d399',
+                yellow: '#fbbf24',
+                blue: '#60a5fa',
+                magenta: '#c084fc',
+                cyan: '#22d3ee',
+                white: '#d8e8e2',
+                brightBlack: '#64748b',
+                brightRed: '#fb7185',
+                brightGreen: '#4ade80',
+                brightYellow: '#fde047',
+                brightBlue: '#93c5fd',
+                brightMagenta: '#d8b4fe',
+                brightCyan: '#67e8f9',
+                brightWhite: '#f8fafc',
+            } : {
+                background: '#f8fcfa',
+                foreground: '#16312b',
+                cursor: '#0f766e',
+                cursorAccent: '#f8fcfa',
+                selectionBackground: '#cde7dc',
+                black: '#12312a',
+                red: '#dc2626',
+                green: '#0f766e',
+                yellow: '#b45309',
+                blue: '#2563eb',
+                magenta: '#9333ea',
+                cyan: '#0891b2',
+                white: '#f8fcfa',
+                brightBlack: '#64748b',
+                brightRed: '#ef4444',
+                brightGreen: '#10b981',
+                brightYellow: '#d97706',
+                brightBlue: '#3b82f6',
+                brightMagenta: '#a855f7',
+                brightCyan: '#06b6d4',
+                brightWhite: '#ffffff',
+            },
+            fontSize: 13,
+            fontFamily: '"Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace',
+            cursorBlink: true,
+            cursorStyle: 'block',
+            scrollback: 10000,
+            tabStopWidth: 4,
+            convertEol: true,
+        });
+        const fitAddon = new FitAddon();
+
+        terminal.loadAddon(fitAddon);
+        terminal.open(xtermContainerRef.current);
+        fitAddon.fit();
+        terminal.focus();
+        terminal.writeln(
+            getLuminaTerminalWindow().__luminaRemoteTerminalSession
+                ? '已恢复远程终端会话。'
+                : '正在建立交互式终端...',
+        );
+
+        xtermRef.current = terminal;
+
+        const dataDisposable = terminal.onData((data) => {
+            const activeSession = terminalSessionRef.current;
+            if (!activeSession) return;
+            void invoke('remote_send_terminal_input', {
+                sessionId: activeSession.id,
+                data,
+            }).catch((error) => {
+                terminal.writeln(`\r\n\x1b[31m[terminal] 输入发送失败: ${error}\x1b[0m`);
+            });
+        });
+
+        const resizeObserver = new ResizeObserver(() => {
+            try {
+                fitAddon.fit();
+            } catch {
+                // xterm can be disposed while the route is changing.
+            }
+        });
+        resizeObserver.observe(xtermContainerRef.current);
+
+        return () => {
+            resizeObserver.disconnect();
+            dataDisposable.dispose();
+            terminal.dispose();
+            if (xtermRef.current === terminal) {
+                xtermRef.current = null;
+            }
+        };
+    }, [isDarkMode, mode, moduleKey, terminalInteractiveMode]);
+
+    // Keep the interactive SSH shell alive while the user moves between modules.
     useEffect(() => {
         if (moduleKey !== 'terminal' || mode !== 'remote') {
             return;
@@ -2105,11 +2236,15 @@ export default function ModuleDetail({
         let streamCleanup: (() => void) | undefined;
         let errorCleanup: (() => void) | undefined;
         let closedCleanup: (() => void) | undefined;
+        let openedSession: RemoteInteractiveTerminalSession | null = null;
+        const terminalWindow = getLuminaTerminalWindow();
+        const cachedSession = terminalWindow.__luminaRemoteTerminalSession ?? null;
 
         setTerminalOutput([]);
-        setTerminalSession(null);
-        terminalSessionRef.current = null;
-        setExecuting(true);
+        setTerminalInteractiveMode(true);
+        terminalSessionRef.current = cachedSession;
+        setTerminalSession(cachedSession);
+        setExecuting(!cachedSession);
 
         const openInteractiveTerminal = async () => {
             try {
@@ -2118,7 +2253,7 @@ export default function ModuleDetail({
                     (event) => {
                         const activeSession = terminalSessionRef.current;
                         if (activeSession && event.payload.sessionId !== activeSession.id) return;
-                        appendTerminalOutput(event.payload.data);
+                        writeTerminalStream(event.payload.data);
                     },
                 );
                 const errorUnlisten = await listen<RemoteTerminalErrorEvent>(
@@ -2126,7 +2261,7 @@ export default function ModuleDetail({
                     (event) => {
                         const activeSession = terminalSessionRef.current;
                         if (activeSession && event.payload.sessionId !== activeSession.id) return;
-                        appendTerminalOutput(`\n[terminal] ${event.payload.error}\n`);
+                        writeTerminalStream(`\r\n\x1b[31m[terminal]\x1b[0m ${event.payload.error}\r\n`);
                     },
                 );
                 const closedUnlisten = await listen<RemoteTerminalStreamEvent>(
@@ -2134,7 +2269,12 @@ export default function ModuleDetail({
                     (event) => {
                         const activeSession = terminalSessionRef.current;
                         if (activeSession && event.payload.sessionId !== activeSession.id) return;
-                        appendTerminalOutput('\n[terminal] session closed\n');
+                        if (terminalWindow.__luminaRemoteTerminalSession?.id === event.payload.sessionId) {
+                            terminalWindow.__luminaRemoteTerminalSession = null;
+                        }
+                        terminalSessionRef.current = null;
+                        setTerminalSession(null);
+                        writeTerminalStream('\r\n\x1b[33m[terminal] session closed\x1b[0m\r\n');
                     },
                 );
 
@@ -2149,24 +2289,39 @@ export default function ModuleDetail({
                 errorCleanup = errorUnlisten;
                 closedCleanup = closedUnlisten;
 
+                if (cachedSession) {
+                    return;
+                }
+
                 const session = await invoke<RemoteInteractiveTerminalSession>(
                     'remote_open_active_terminal_session',
                     {
                         title: 'analysis-shell',
                         cols: 120,
-                        rows: 34,
+                        rows: 48,
                     },
                 );
+                openedSession = session;
 
                 if (cancelled) {
                     await invoke('remote_close_terminal_session', { sessionId: session.id }).catch(() => undefined);
                     return;
                 }
 
+                terminalWindow.__luminaRemoteTerminalSession = session;
                 terminalSessionRef.current = session;
                 setTerminalSession(session);
             } catch (error) {
+                if (
+                    openedSession
+                    && terminalWindow.__luminaRemoteTerminalSession?.id === openedSession.id
+                ) {
+                    terminalWindow.__luminaRemoteTerminalSession = null;
+                }
+                terminalSessionRef.current = null;
+                setTerminalSession(null);
                 appendTerminalOutput(`远程交互终端启动失败，已回退到命令模式: ${error}\n`);
+                setTerminalInteractiveMode(false);
                 await initTerminalPrompt();
             } finally {
                 if (!cancelled) {
@@ -2179,15 +2334,12 @@ export default function ModuleDetail({
 
         return () => {
             cancelled = true;
-            const session = terminalSessionRef.current;
             terminalSessionRef.current = null;
             setTerminalSession(null);
+            setTerminalInteractiveMode(false);
             streamCleanup?.();
             errorCleanup?.();
             closedCleanup?.();
-            if (session) {
-                void invoke('remote_close_terminal_session', { sessionId: session.id });
-            }
         };
     }, [moduleKey, mode]);
 
@@ -6306,11 +6458,28 @@ export default function ModuleDetail({
         }
     };
 
+    const normalizeTerminalFallbackOutput = (value: string): string =>
+        value
+            .replace(TERMINAL_CONTROL_SEQUENCE_PATTERN, '')
+            .replace(/\x07/g, '')
+            .replace(/\r\n/g, '\n')
+            .replace(/\r/g, '\n');
+
     const appendTerminalOutput = (line: string) => {
-        const normalizedLine = line.length > TERMINAL_OUTPUT_MAX_CHARS
-            ? `${line.slice(0, TERMINAL_OUTPUT_MAX_CHARS)}\n... output truncated for terminal performance`
-            : line;
+        const cleanLine = normalizeTerminalFallbackOutput(line);
+        const normalizedLine = cleanLine.length > TERMINAL_OUTPUT_MAX_CHARS
+            ? `${cleanLine.slice(0, TERMINAL_OUTPUT_MAX_CHARS)}\n... output truncated for terminal performance`
+            : cleanLine;
         setTerminalOutput(prev => [...prev, normalizedLine].slice(-TERMINAL_HISTORY_LIMIT));
+    };
+
+    const writeTerminalStream = (data: string) => {
+        const terminal = xtermRef.current;
+        if (terminal) {
+            terminal.write(data);
+            return;
+        }
+        appendTerminalOutput(data);
     };
 
     const handleTerminalCommand = async () => {
@@ -6925,7 +7094,7 @@ export default function ModuleDetail({
         setLoading(true);
         setDockerContainerId(containerId);
         try {
-            const cmd = `docker inspect ${containerId} 2>/dev/null`;
+            const cmd = `docker inspect ${quoteDockerArg(containerId)} 2>&1`;
             const output = await executeRemoteCommand(cmd);
             try {
                 const data = JSON.parse(output);
@@ -6944,7 +7113,8 @@ export default function ModuleDetail({
     const loadDockerDirectory = async (containerId: string, path: string) => {
         setLoading(true);
         try {
-            const cmd = `docker exec ${containerId} ls -la "${path}" 2>/dev/null`;
+            const safePath = path.replace(/'/g, "'\\''");
+            const cmd = buildDockerShellCommand(containerId, `ls -la '${safePath}' | head -200`);
             const output = await executeRemoteCommand(cmd);
 
             if (!output || output.includes('Error')) {
@@ -6990,6 +7160,50 @@ export default function ModuleDetail({
         setLoading(false);
     };
 
+    const dockerReadOnlyCommands = [
+        { key: 'processes', label: '进程', command: 'ps aux 2>/dev/null || ps -ef 2>/dev/null || ps' },
+        { key: 'network', label: '网络', command: 'ss -tunap 2>/dev/null || netstat -tunap 2>/dev/null || cat /proc/net/tcp' },
+        { key: 'users', label: '用户', command: 'cat /etc/passwd 2>/dev/null | head -80' },
+        { key: 'env', label: '环境变量', command: 'env | sort | head -120' },
+        { key: 'recent', label: '近期文件', command: 'find / -xdev -type f -mtime -7 2>/dev/null | head -200' },
+    ];
+
+    const openDockerCommandPanel = (containerId: string, mode: 'readonly' | 'advanced') => {
+        setDockerContainerId(containerId);
+        setDockerCommandMode(mode);
+        setDockerCommandOutput('');
+        setDockerCommandInput('');
+        setDockerCommandOpen(true);
+    };
+
+    const runDockerContainerCommand = async (containerId: string, command: string) => {
+        setDockerCommandRunning(true);
+        setDockerCommandOutput('正在执行...');
+        try {
+            const output = await executeRemoteCommand(buildDockerShellCommand(containerId, command));
+            setDockerCommandOutput(output || '命令无输出');
+        } catch (error) {
+            setDockerCommandOutput(`执行失败: ${error}`);
+        }
+        setDockerCommandRunning(false);
+    };
+
+    const confirmDockerAdvancedCommand = () => {
+        const command = dockerCommandInput.trim();
+        if (!command) {
+            message.warning('请输入容器命令');
+            return;
+        }
+
+        Modal.confirm({
+            title: '确认执行高级命令',
+            content: '高级命令可能改变容器状态或业务数据。确认后将在目标容器内执行该命令。',
+            okText: '确认执行',
+            cancelText: '取消',
+            onOk: () => runDockerContainerCommand(dockerContainerId, command),
+        });
+    };
+
     // Docker 容器右键菜单
     const getDockerContextMenu = (record: any): MenuProps['items'] => [
         {
@@ -7014,7 +7228,7 @@ export default function ModuleDetail({
             icon: <FileSearchOutlined />,
             label: '查看日志',
             onClick: async () => {
-                const cmd = `docker logs --tail 100 ${record.container_id} 2>&1`;
+                const cmd = `docker logs --tail 200 ${quoteDockerArg(record.container_id)} 2>&1`;
                 const output = await executeRemoteCommand(cmd);
                 setFileContent(output);
                 setPreviewFileName(`${record.container_id} 日志`);
@@ -7022,35 +7236,30 @@ export default function ModuleDetail({
                 setPreviewModalOpen(true);
             },
         },
-        { type: 'divider' },
         {
-            key: 'start',
-            label: '▶️ 启动',
-            disabled: record.status?.includes('Up'),
-            onClick: async () => {
-                message.loading({ content: '正在启动...', key: 'docker' });
-                await executeRemoteCommand(`docker start ${record.container_id}`);
-                message.success({ content: '已启动', key: 'docker' });
-            },
+            key: 'readonly-title',
+            icon: <SearchOutlined />,
+            label: '只读检查',
+            disabled: true,
         },
-        {
-            key: 'stop',
-            label: '⏹️ 停止',
+        ...dockerReadOnlyCommands.map((item) => ({
+            key: `readonly-${item.key}`,
+            label: item.label,
             disabled: !record.status?.includes('Up'),
-            onClick: async () => {
-                message.loading({ content: '正在停止...', key: 'docker' });
-                await executeRemoteCommand(`docker stop ${record.container_id}`);
-                message.success({ content: '已停止', key: 'docker' });
+            onClick: () => {
+                openDockerCommandPanel(record.container_id, 'readonly');
+                runDockerContainerCommand(record.container_id, item.command);
             },
+        })),
+        {
+            type: 'divider' as const,
         },
         {
-            key: 'restart',
-            label: '🔄 重启',
-            onClick: async () => {
-                message.loading({ content: '正在重启...', key: 'docker' });
-                await executeRemoteCommand(`docker restart ${record.container_id}`);
-                message.success({ content: '已重启', key: 'docker' });
-            },
+            key: 'advanced',
+            icon: <ApiOutlined />,
+            label: '高级执行',
+            disabled: !record.status?.includes('Up'),
+            onClick: () => openDockerCommandPanel(record.container_id, 'advanced'),
         },
     ];
 
@@ -7280,17 +7489,20 @@ export default function ModuleDetail({
         ];
 
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <div
+                className={`linux-file-manager ${isDarkMode ? 'linux-file-manager-dark' : 'linux-file-manager-light'}`}
+                style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
+            >
                 {/* 标题栏 */}
                 <div 
-                    className={glassEnabled ? 'glass-header-container' : ''}
+                    className={`${glassEnabled ? 'glass-header-container ' : ''}linux-file-manager-header`}
                     style={{ flexShrink: 0, marginBottom: 16 }}
                 >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                    <div className="linux-file-manager-titlebar" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                         <Title level={4} style={{ margin: 0 }}>文件管理</Title>
                         <Tag color="green">远程</Tag>
                         {privilegeMode !== 'none' && <Tag color="orange">{privilegeMode}</Tag>}
-                        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                        <div className="linux-file-manager-actions" style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                             <Button
                                 icon={<FileSearchOutlined />}
                                 onClick={() => { setFindType('file'); setFindModalOpen(true); setFindQuery(''); setFindResults([]); }}
@@ -7320,6 +7532,7 @@ export default function ModuleDetail({
                     {/* 可编辑路径栏 */}
                     {editingPath ? (
                         <Input
+                            className="linux-file-manager-path-input"
                             value={pathInput}
                             onChange={(e) => setPathInput(e.target.value)}
                             onPressEnter={() => {
@@ -7333,6 +7546,7 @@ export default function ModuleDetail({
                         />
                     ) : (
                         <div
+                            className="linux-file-manager-pathbar"
                             style={{
                                 display: 'flex',
                                 alignItems: 'center',
@@ -7362,10 +7576,11 @@ export default function ModuleDetail({
                 </div>
 
                 {/* 文件列表 */}
-                <div style={{ flex: 1, overflow: 'auto' }}>
+                <div className="linux-file-manager-list" style={{ flex: 1, overflow: 'auto' }}>
                     {/* 返回上级 */}
                     {filePath !== '/' && (
                         <div
+                            className="linux-file-manager-up"
                             style={{
                                 padding: '8px 16px',
                                 cursor: 'pointer',
@@ -7382,6 +7597,7 @@ export default function ModuleDetail({
                         </div>
                     )}
                     <Table
+                        className="linux-file-manager-table"
                         dataSource={fileList}
                         columns={fileColumns}
                         size="small"
@@ -8160,10 +8376,17 @@ export default function ModuleDetail({
                 },
                 { title: '端口', dataIndex: 'ports', ellipsis: true },
                 {
-                    title: '操作', key: 'action', width: 70, fixed: 'right' as const,
+                    title: '操作', key: 'action', width: 90, fixed: 'right' as const,
                     render: (_: any, record: any) => record.isContainerRecord ? (
                         <Dropdown menu={{ items: getDockerContextMenu(record) }} trigger={['click']}>
-                            <Button size="small" type="text" icon={<MoreOutlined />} />
+                            <Button
+                                size="small"
+                                type="text"
+                                icon={<MoreOutlined />}
+                                aria-label={`分析 ${record.names || record.container_id}`}
+                            >
+                                分析
+                            </Button>
                         </Dropdown>
                     ) : null
                 },
@@ -9362,6 +9585,7 @@ export default function ModuleDetail({
             };
         // 点击终端区域时聚焦输入框
         const handleTerminalClick = () => {
+            xtermRef.current?.focus();
             inputRef.current?.focus();
         };
 
@@ -9412,7 +9636,8 @@ export default function ModuleDetail({
                 ref={terminalRef}
                 onClick={handleTerminalClick}
                 style={{
-                    height: 'calc(100vh - 150px)',
+                    height: '100%',
+                    minHeight: 0,
                     background: terminalTheme.background,
                     border: terminalTheme.border,
                     boxShadow: terminalTheme.shadow,
@@ -9426,8 +9651,10 @@ export default function ModuleDetail({
                 }}
             >
                 {/* 历史输出 */}
-                {terminalSession ? (
-                    <pre
+                {terminalInteractiveMode ? (
+                    <div
+                        className="linux-xterm-host"
+                        ref={xtermContainerRef}
                         style={{
                             margin: 0,
                             color: terminalTheme.text,
@@ -9438,14 +9665,14 @@ export default function ModuleDetail({
                             lineHeight: 1.45,
                         }}
                     >
-                        {terminalOutput.length > 0 ? terminalOutput.join('') : '正在建立交互式终端...\n'}
-                    </pre>
+                        {null}
+                    </div>
                 ) : (
                     terminalOutput.map(renderLine)
                 )}
 
                 {/* 当前输入行 - 使用完整提示符格式 */}
-                {!executing && !terminalSession && (
+                {!executing && !terminalInteractiveMode && (
                     <div>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
                             <span style={{ color: terminalTheme.accent }}>┌──</span>
@@ -9486,32 +9713,6 @@ export default function ModuleDetail({
                 {/* 执行中状态 */}
                 {executing && (
                     <div style={{ color: terminalTheme.muted }}>执行中...</div>
-                )}
-                {!executing && terminalSession && (
-                    <div style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
-                        <span style={{ color: terminalTheme.accent }}>$</span>
-                        <input
-                            ref={inputRef}
-                            value={terminalInput}
-                            onChange={(e) => setTerminalInput(e.target.value)}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    handleTerminalCommand();
-                                }
-                            }}
-                            style={{
-                                flex: 1,
-                                background: 'transparent',
-                                border: 'none',
-                                outline: 'none',
-                                color: terminalTheme.command,
-                                fontFamily: 'Consolas, monospace',
-                                fontSize: 14,
-                                marginLeft: 6,
-                                caretColor: terminalTheme.caret,
-                            }}
-                        />
-                    </div>
                 )}
             </div>
         );
@@ -9880,17 +10081,16 @@ export default function ModuleDetail({
     const renderConfigFile = () => {
         if (listData.length === 0) return <Text type="secondary">暂无数据</Text>;
 
-        // 根据模块类型设置不同的样式
-        const configStyles: Record<string, { bg: string; border: string; icon: string; title: string; color: string }> = {
-            bashrc_check: { bg: '#f6ffed', border: '#b7eb8f', icon: '📜', title: 'Bashrc配置检查', color: '#52c41a' },
-            profile_check: { bg: '#e6f7ff', border: '#91d5ff', icon: '📋', title: 'Profile配置检查', color: '#1890ff' },
-            pam_config: { bg: '#fff1f0', border: '#ffa39e', icon: '🔒', title: 'PAM认证模块', color: '#f5222d' },
-            sudo_config: { bg: '#fff7e6', border: '#ffd591', icon: '🔑', title: 'Sudo权限配置', color: '#fa8c16' },
-            sudoers_config: { bg: '#fff7e6', border: '#ffd591', icon: '🔑', title: 'Sudoers权限配置', color: '#fa8c16' },
-            selinux_status: { bg: '#f9f0ff', border: '#d3adf7', icon: '🛡️', title: 'SELinux/AppArmor状态', color: '#722ed1' },
-            win_firewall: { bg: '#e6fffb', border: '#87e8de', icon: '🧱', title: 'Windows 防火墙配置', color: '#13c2c2' },
+        const configTitles: Record<string, string> = {
+            bashrc_check: 'Bashrc 检查',
+            profile_check: 'Profile 检查',
+            pam_config: 'PAM 配置',
+            sudo_config: 'Sudo 配置',
+            sudoers_config: 'Sudoers 配置',
+            selinux_status: 'SELinux / AppArmor 状态',
+            win_firewall: 'Windows 防火墙配置',
         };
-        const style = configStyles[moduleKey] || { bg: '#fafafa', border: '#d9d9d9', icon: '📄', title: '配置文件', color: '#8c8c8c' };
+        const title = configTitles[moduleKey] || '配置文件';
 
         // 分段处理
         const sections: { title: string; lines: string[] }[] = [];
@@ -9911,48 +10111,38 @@ export default function ModuleDetail({
         }
 
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Card
-                    size="small"
-                    className={cardClass}
-                    style={{
-                        background: isDarkMode ? (glassEnabled ? 'rgba(255, 255, 255, 0.05)' : '#1f1f1f') : style.bg,
-                        border: `1px solid ${isDarkMode ? borderColor : style.border}`
-                    }}
-                >
-                    <Text strong style={{ fontSize: 15, color: isDarkMode ? style.color : 'inherit' }}>{style.icon} {style.title}</Text>
-                    <Tag style={{ marginLeft: 12 }}>{listData.length} 行</Tag>
-                </Card>
+            <div className="linux-config-workbench">
+                <div className="linux-config-summary">
+                    <div>
+                        <Text className="linux-config-kicker">配置审计</Text>
+                        <Text strong className="linux-config-title">{title}</Text>
+                    </div>
+                    <Space size={8} wrap>
+                        <Tag>{sections.length} 段</Tag>
+                        <Tag>{listData.length} 行</Tag>
+                    </Space>
+                </div>
                 {sections.map((section, idx) => (
-                    <Card
+                    <section
                         key={idx}
-                        size="small"
-                        className={cardClass}
-                        title={<span style={{ fontSize: 13, color: isDarkMode ? '#e0e0e0' : 'inherit' }}>📁 {section.title}</span>}
-                        style={{ borderRadius: 8 }}
+                        className="linux-config-section"
                     >
-                        <pre style={{
-                            margin: 0,
-                            padding: 12,
-                            background: '#1a1a2e',
-                            color: '#e0e0e0',
-                            borderRadius: 6,
-                            fontSize: 12,
-                            maxHeight: 300,
-                            overflow: 'auto',
-                            fontFamily: 'Consolas, Monaco, monospace'
-                        }}>
+                        <div className="linux-config-section-head">
+                            <Text strong>{section.title}</Text>
+                            <Text type="secondary">{section.lines.length} 行</Text>
+                        </div>
+                        <pre className="linux-config-pre">
                             {section.lines.map((line, i) => {
                                 // 语法高亮
-                                let color = '#e0e0e0';
+                                let color = isDarkMode ? '#d8e8e2' : '#16312b';
                                 if (line.startsWith('#')) color = '#6a9955';
-                                else if (line.includes('=')) color = '#9cdcfe';
-                                else if (line.match(/^(export|alias|if|then|fi|else|for|do|done)/)) color = '#c586c0';
-                                else if (line.match(/sudo|root|ALL/)) color = '#ce9178';
+                                else if (line.includes('=')) color = isDarkMode ? '#93c5fd' : '#2563eb';
+                                else if (line.match(/^(export|alias|if|then|fi|else|for|do|done)/)) color = isDarkMode ? '#d8b4fe' : '#7e22ce';
+                                else if (line.match(/sudo|root|ALL/)) color = isDarkMode ? '#fbbf24' : '#b45309';
                                 return <div key={i} style={{ color }}>{line}</div>;
                             })}
                         </pre>
-                    </Card>
+                    </section>
                 ))}
             </div>
         );
@@ -11786,13 +11976,14 @@ export default function ModuleDetail({
     // 终端模块使用专用布局
     if (moduleKey === 'terminal') {
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div 
-                    className={glassEnabled ? 'glass-header-container' : ''}
-                    style={glassEnabled ? { flexShrink: 0 } : { flexShrink: 0, background: headerBg, paddingBottom: 8, marginBottom: 8 }}
+            <div className={`${workbenchShellClassName} linux-terminal-shell`} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div className={`${workbenchWorkspaceClassName} linux-terminal-workspace`} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%' }}>
+                <div
+                    className={workbenchHeaderClassName}
+                    style={{ flexShrink: 0 }}
                 >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <Title level={4} style={{ margin: 0 }}>{displayTitle}</Title>
+                    <div className={workbenchTitlebarClassName} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Title className={workbenchTitleClassName} level={4} style={{ margin: 0 }}>{displayTitle}</Title>
                         <Tag color={mode === 'local' ? 'blue' : 'green'}>{mode === 'local' ? '本地' : '远程'}</Tag>
                         {mode === 'remote' && privilegeMode !== 'none' && <Tag color="orange">{privilegeMode}</Tag>}
                         <Button
@@ -11805,8 +11996,9 @@ export default function ModuleDetail({
                         </Button>
                     </div>
                 </div>
-                <div style={{ flex: 1, overflow: 'hidden' }}>
+                <div className={`${workbenchBodyClassName} linux-terminal-body`} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
                     {renderTerminal()}
+                </div>
                 </div>
             </div>
         );
@@ -12165,6 +12357,57 @@ export default function ModuleDetail({
                     scroll={{ y: 400 }}
                     loading={loading}
                 />
+            </Modal>
+
+            <Modal
+                title={`${dockerCommandMode === 'readonly' ? '只读检查' : '高级执行'}: ${dockerContainerId}`}
+                open={dockerCommandOpen}
+                onCancel={() => setDockerCommandOpen(false)}
+                footer={null}
+                width={820}
+                destroyOnHidden
+            >
+                {dockerCommandMode === 'readonly' ? (
+                    <Space wrap style={{ marginBottom: 12 }}>
+                        {dockerReadOnlyCommands.map((item) => (
+                            <Button
+                                key={item.key}
+                                size="small"
+                                onClick={() => runDockerContainerCommand(dockerContainerId, item.command)}
+                                loading={dockerCommandRunning}
+                            >
+                                {item.label}
+                            </Button>
+                        ))}
+                    </Space>
+                ) : (
+                    <div style={{ marginBottom: 12 }}>
+                        <Alert
+                            type="warning"
+                            showIcon
+                            style={{ marginBottom: 12 }}
+                            title="高级命令会在容器内执行，可能改变业务状态。优先使用只读命令。"
+                        />
+                        <Input.TextArea
+                            aria-label="容器命令"
+                            value={dockerCommandInput}
+                            onChange={(event) => setDockerCommandInput(event.target.value)}
+                            rows={4}
+                            placeholder="例如: id 或 cat /etc/os-release"
+                        />
+                        <Button
+                            type="primary"
+                            style={{ marginTop: 12 }}
+                            onClick={confirmDockerAdvancedCommand}
+                            loading={dockerCommandRunning}
+                        >
+                            执行命令
+                        </Button>
+                    </div>
+                )}
+                <pre className="terminal-output" style={{ maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                    {dockerCommandOutput || '暂无输出'}
+                </pre>
             </Modal>
 
             <Modal
