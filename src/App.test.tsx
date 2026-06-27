@@ -21,6 +21,47 @@ vi.mock('@tauri-apps/api/window', () => ({
   }),
 }));
 
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async () => vi.fn()),
+}));
+
+vi.mock('@xterm/xterm', () => ({
+  Terminal: class TerminalMock {
+    private element: HTMLElement | null = null;
+
+    loadAddon() {}
+
+    open(element: HTMLElement) {
+      this.element = element;
+      this.element.classList.add('xterm');
+    }
+
+    write(data: string) {
+      if (this.element) {
+        this.element.textContent = `${this.element.textContent ?? ''}${data}`;
+      }
+    }
+
+    writeln(data: string) {
+      this.write(`${data}\n`);
+    }
+
+    onData() {
+      return { dispose: vi.fn() };
+    }
+
+    focus() {}
+
+    dispose() {}
+  },
+}));
+
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class FitAddonMock {
+    fit() {}
+  },
+}));
+
 describe('App authorization gate', () => {
   const tauriInternals = '__TAURI_INTERNALS__' as const;
 
@@ -467,6 +508,97 @@ describe('App authorization gate', () => {
     expect(screen.getByRole('tab', { name: '登录失败' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Sudo 日志' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Web 访问日志' })).toBeInTheDocument();
+  });
+
+  it('keeps the Linux remote terminal mounted after the user switches to another remote tool', async () => {
+    (window as Window & { __TAURI_INTERNALS__?: unknown })[tauriInternals] = {};
+    localStorage.setItem(
+      'emergency_ssh_connections',
+      JSON.stringify([
+        {
+          id: 'demo-linux',
+          name: 'Demo Linux',
+          host: '10.0.0.5',
+          port: 22,
+          username: 'root',
+          authType: 'password',
+          password: 'demo',
+        },
+      ]),
+    );
+
+    invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
+      if (command === 'remote_connect') {
+        return {
+          id: 'conn-1',
+          name: 'Demo Linux',
+          host: '10.0.0.5',
+          port: 22,
+          username: 'root',
+          osType: 'Linux',
+          status: 'connected',
+        };
+      }
+
+      if (command === 'remote_open_active_terminal_session') {
+        return {
+          id: 'term-1',
+          connectionId: 'conn-1',
+          title: 'analysis-shell',
+          cwd: '~',
+        };
+      }
+
+      if (command === 'remote_close_terminal_session') {
+        return null;
+      }
+
+      if (command === 'ssh_execute') {
+        const remoteCommand = args?.command || '';
+        if (remoteCommand.includes('test -d')) {
+          return { success: true, stdout: 'EXISTS\n', stderr: '' };
+        }
+        if (remoteCommand.includes('ls -la')) {
+          return { success: true, stdout: '', stderr: '' };
+        }
+        return { success: true, stdout: '', stderr: '' };
+      }
+
+      return [];
+    });
+
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByText('远程分析'));
+    fireEvent.click(await screen.findByRole('button', { name: /连接/ }));
+    fireEvent.click(await screen.findByText('远程终端'));
+
+    await waitFor(() => {
+      expect(container.querySelector('.analysis-module-view[data-module-key="terminal"]')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('remote_open_active_terminal_session', {
+        title: 'analysis-shell',
+        cols: 120,
+        rows: 48,
+      });
+    });
+
+    fireEvent.click(await screen.findByText('文件管理'));
+
+    await waitFor(() => {
+      expect(container.querySelector('.analysis-module-view[data-module-key="file_manager"]')).toBeInTheDocument();
+    });
+    const cachedTerminalView = container.querySelector('.analysis-module-view[data-module-key="terminal"]');
+    expect(cachedTerminalView).toBeInTheDocument();
+    expect(cachedTerminalView).toHaveClass('analysis-terminal-cache-hidden');
+
+    fireEvent.click(await screen.findByText('远程终端'));
+
+    await waitFor(() => {
+      expect(container.querySelector('.analysis-module-view[data-module-key="terminal"]')).not.toHaveClass('analysis-terminal-cache-hidden');
+    });
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'remote_open_active_terminal_session')).toHaveLength(1);
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'remote_close_terminal_session')).toHaveLength(0);
   });
 
   it('uses the flush content layer for Windows local scan and results pages', async () => {

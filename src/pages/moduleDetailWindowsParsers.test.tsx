@@ -1290,6 +1290,48 @@ describe('ModuleDetail Windows security module rendering', () => {
     ))).toBe(true);
   });
 
+  it('shows compact Docker container action buttons for local investigation', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'execute_local_command') {
+        return {
+          success: true,
+          stdout: [
+            '===DOCKER_INSTALL===',
+            JSON.stringify([{ CommandPath: 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe', Version: '26.1.0' }]),
+            '===DOCKER_SERVICE===',
+            '[]',
+            '===DOCKER_CONTAINERS===',
+            JSON.stringify([{ ID: 'abc123def456', Image: 'nginx:stable', Status: 'Up 2 hours', Names: 'web', Ports: '0.0.0.0:8080->80/tcp' }]),
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="docker"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    expect(await screen.findByText('nginx:stable')).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: '查看容器详情' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '浏览容器文件' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看容器日志' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '运行只读检查' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '执行容器命令' })).toBeInTheDocument();
+  });
+
   it('requires confirmation before running an advanced Docker container command', async () => {
     const executedCommands: string[] = [];
     invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
@@ -1345,6 +1387,62 @@ describe('ModuleDetail Windows security module rendering', () => {
       expect(screen.getByText('uid=0(root)')).toBeInTheDocument();
     });
     expect(executedCommands.some((cmd) => cmd.includes('docker exec') && cmd.includes('id'))).toBe(true);
+  });
+
+  it('quotes advanced Docker commands safely for the Windows local PowerShell bridge', async () => {
+    const executedCommands: string[] = [];
+    invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
+      if (command === 'execute_local_command') {
+        executedCommands.push(args?.command || '');
+        if (args?.command?.includes('docker exec')) {
+          return { success: true, stdout: 'ID=alpine', stderr: '' };
+        }
+
+        return {
+          success: true,
+          stdout: [
+            '===DOCKER_INSTALL===',
+            JSON.stringify([{ CommandPath: 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe', Version: '26.1.0' }]),
+            '===DOCKER_SERVICE===',
+            '[]',
+            '===DOCKER_CONTAINERS===',
+            JSON.stringify([{ ID: 'abc123def456', Image: 'alpine:latest', Status: 'Up 2 hours', Names: 'shell', Ports: '' }]),
+          ].join('\n'),
+          stderr: '',
+        };
+      }
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="docker"
+        mode="local"
+        osType="Windows"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    expect(await screen.findByText('alpine:latest')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '执行容器命令' }));
+    fireEvent.change(await screen.findByLabelText('容器命令'), {
+      target: { value: 'cat /etc/os-release | grep "ID="' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /执行命令/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /确认执行/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('ID=alpine')).toBeInTheDocument();
+    });
+
+    const dockerExec = executedCommands.find((cmd) => cmd.includes('docker exec')) || '';
+    expect(dockerExec).toContain('grep "ID="');
+    expect(dockerExec).not.toContain('\\"ID=\\"');
   });
 
   it('runs a bounded Windows webshell scan and renders Windows path hits', async () => {

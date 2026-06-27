@@ -965,6 +965,54 @@ describe('ModuleDetail Linux remote module rendering', () => {
     });
   });
 
+  it('renders BaoTa panel inventory as a Linux workbench instead of stacked cards', async () => {
+    const { container } = renderRemoteModule(
+      'panel',
+      [
+        '===BT_DETECT===',
+        'drwxr-xr-x 12 root root 4096 Jun 27 10:00 BT-Panel',
+        'drwxr-xr-x  3 root root 4096 Jun 27 10:00 data',
+        '===BT_PORT===',
+        '8888',
+        '===BT_BASICAUTH===',
+        '{"open": true, "basic_user": "btadmin"}',
+        '===BT_DATABASES===',
+        'drwx------ 2 mysql mysql 4096 Jun 27 10:00 appdb',
+        '===BT_PY_QUERY===',
+        'USERS:',
+        "(1, 'admin', 'hashvalue', 'saltvalue')",
+        'SITES:',
+        "(1, 'app.example.com', '/www/wwwroot/app', '1', 'production site')",
+        'DATABASES:',
+        "(1, 'appdb', 'app_user', 'secret', '127.0.0.1', 'application database')",
+        'LOGS:',
+        "(1, '用户登录', 'root login from 203.0.113.10', '2026-06-27 10:00:00')",
+        '===BT_CRONTAB===',
+        '30 2 * * * bash scan.sh',
+        '===BT_FIREWALL===',
+        '[{"id":"1","port":"8888","type":"tcp","ps":"panel","addtime":"2026-06-27"}]',
+        '===BT_PANEL_LOGS===',
+        'INFO panel started',
+        'ERROR failed login from 203.0.113.10',
+      ].join('\n'),
+      { isDarkMode: true },
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector('.linux-panel-workbench')).toBeInTheDocument();
+      expect(container.querySelector('.linux-panel-commandbar')).toBeInTheDocument();
+      expect(container.querySelector('.linux-panel-metrics')).toBeInTheDocument();
+      expect(container.querySelector('.linux-panel-tabs')).toBeInTheDocument();
+      expect(container.querySelector('.linux-panel-table')).toBeInTheDocument();
+      expect(container.querySelector('.ant-card')).not.toBeInTheDocument();
+      expect(screen.getAllByText('app.example.com').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('/www/wwwroot/app').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('appdb').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('8888').length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/root login from 203\.0\.113\.10/).length).toBeGreaterThan(0);
+    });
+  });
+
   it('structures auth, sudo, and web access log fields', async () => {
     renderRemoteModule(
       'auth_log',

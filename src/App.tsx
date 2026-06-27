@@ -638,6 +638,7 @@ function App() {
   const [scanResults, setScanResults] = useState<AnalysisResult[]>([]);
   const [scanRiskFindings, setScanRiskFindings] = useState<RiskFinding[]>([]);
   const [remoteWorkspaceSeed, setRemoteWorkspaceSeed] = useState(0);
+  const [linuxTerminalPaneInitialized, setLinuxTerminalPaneInitialized] = useState(false);
   const [wallpaperLoaded, setWallpaperLoaded] = useState<boolean>(false);
 
 
@@ -739,20 +740,35 @@ function App() {
   const isWindowsLocalModuleContent =
     mode === 'local' &&
     osType === 'Windows';
+  const isLinuxRemote = mode === 'remote' && osType === 'Linux';
   const activeWindowsWorkspace = isWindowsLocalModuleContent
     ? getWindowsWorkspace(currentModule)
     : undefined;
   const activeLinuxWorkspace =
-    mode === 'remote' && osType === 'Linux'
+    isLinuxRemote
       ? getLinuxWorkspace(currentModule)
       : undefined;
   const selectedAnalysisMenuKey = activeWindowsWorkspace?.key ?? activeLinuxWorkspace?.key ?? currentModule;
   const isLinuxRemoteModuleContent =
-    mode === 'remote' &&
-    osType === 'Linux' &&
-    !['remote_workspace', 'file_manager', 'terminal', 'settings', 'ai_analysis'].includes(currentModule);
+    isLinuxRemote &&
+    !['remote_workspace', 'settings', 'ai_analysis'].includes(currentModule);
   const isAiAnalysisContent = currentModule === 'ai_analysis';
   const isFlushModuleContent = isWindowsLocalModuleContent || isLinuxRemoteModuleContent || isAiAnalysisContent;
+  const shouldRenderLinuxTerminalPane =
+    isLinuxRemote &&
+    (currentModule === 'terminal' || linuxTerminalPaneInitialized);
+
+  useEffect(() => {
+    if (!isLinuxRemote) {
+      setLinuxTerminalPaneInitialized(false);
+      return;
+    }
+
+    if (currentModule === 'terminal') {
+      setLinuxTerminalPaneInitialized(true);
+    }
+  }, [currentModule, isLinuxRemote]);
+
   const renderModuleDetail = (moduleKey: string, compactHeader = false) => {
     if (mode === 'none') {
       return null;
@@ -774,6 +790,20 @@ function App() {
           setCurrentModule(key);
         }}
       />
+    );
+  };
+
+  const renderLinuxTerminalPane = () => {
+    const hidden = currentModule !== 'terminal';
+
+    return (
+      <div
+        className={`analysis-module-view analysis-module-enter analysis-terminal-cache ${hidden ? 'analysis-terminal-cache-hidden' : 'analysis-terminal-cache-active'}`}
+        data-module-key="terminal"
+        aria-hidden={hidden}
+      >
+        {renderModuleDetail('terminal')}
+      </div>
     );
   };
 
@@ -845,7 +875,8 @@ function App() {
             zIndex: 5,
           }}
         >
-          {currentModule === 'settings' ? (
+          {shouldRenderLinuxTerminalPane ? renderLinuxTerminalPane() : null}
+          {currentModule === 'terminal' && shouldRenderLinuxTerminalPane ? null : currentModule === 'settings' ? (
             <div key={currentModule} className="analysis-module-view analysis-module-enter" data-module-key={currentModule}>
               <Settings
                 isDarkMode={isDarkMode}

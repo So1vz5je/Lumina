@@ -1347,13 +1347,24 @@ function buildWindowsPreviewHexCommand(path: string): string {
     return `$ErrorActionPreference='Stop'; $path=${quotePowerShellLiteral(path)}; $stream=[IO.File]::OpenRead($path); try { $buffer=New-Object byte[] 65536; $read=$stream.Read($buffer,0,$buffer.Length); if ($read -le 0) { '' } else { -join ($buffer[0..($read-1)] | ForEach-Object { $_.ToString('x2') }) } } finally { $stream.Dispose() }`;
 }
 
-function quoteDockerArg(value: string): string {
-    return `"${String(value).replace(/(["\\$`])/g, '\\$1')}"`;
+type DockerHostShell = 'posix' | 'powershell';
+
+function quotePosixArg(value: string): string {
+    return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-function buildDockerShellCommand(containerId: string, command: string): string {
-    const fallback = `if command -v sh >/dev/null 2>&1; then sh -lc ${quoteDockerArg(command)}; elif command -v bash >/dev/null 2>&1; then bash -lc ${quoteDockerArg(command)}; elif command -v ash >/dev/null 2>&1; then ash -lc ${quoteDockerArg(command)}; else echo "No supported shell found in container"; exit 127; fi`;
-    return `docker exec ${quoteDockerArg(containerId)} sh -lc ${quoteDockerArg(fallback)} 2>&1`;
+function quotePowerShellArg(value: string): string {
+    return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function quoteDockerHostArg(value: string, hostShell: DockerHostShell): string {
+    return hostShell === 'powershell' ? quotePowerShellArg(value) : quotePosixArg(value);
+}
+
+function buildDockerShellCommand(containerId: string, command: string, hostShell: DockerHostShell = 'posix'): string {
+    const innerCommand = quotePosixArg(command);
+    const fallback = `if command -v sh >/dev/null 2>&1; then sh -lc ${innerCommand}; elif command -v bash >/dev/null 2>&1; then bash -lc ${innerCommand}; elif command -v ash >/dev/null 2>&1; then ash -lc ${innerCommand}; else echo "No supported shell found in container"; exit 127; fi`;
+    return `docker exec ${quoteDockerHostArg(containerId, hostShell)} sh -lc ${quoteDockerHostArg(fallback, hostShell)} 2>&1`;
 }
 
 function buildWindowsWebshellScanCommand(customRoots = ''): string {
@@ -2013,6 +2024,7 @@ export default function ModuleDetail({
     const borderColor = isDarkMode ? '#434343' : '#f0f0f0';
     const isWindowsLocalMode = mode === 'local' && osType === 'Windows';
     const isLinuxRemoteMode = mode === 'remote' && osType === 'Linux';
+    const dockerHostShell: DockerHostShell = isWindowsLocalMode ? 'powershell' : 'posix';
     const isModuleWorkbenchMode = isWindowsLocalMode || isLinuxRemoteMode;
     const isCompactWindowsWorkspaceModule = isWindowsLocalMode && compactHeader;
     const workbenchShellClassName = isWindowsLocalMode
@@ -6890,7 +6902,7 @@ export default function ModuleDetail({
             // 直接尝试读取文件，如果容器未运行会自动失败
             if (imageExts.includes(ext)) {
                 // 图片预览
-                const base64Cmd = `docker exec ${containerId} base64 "${file.fullPath}" 2>/dev/null`;
+                const base64Cmd = buildDockerShellCommand(containerId, `base64 ${quotePosixArg(file.fullPath)} 2>/dev/null`, dockerHostShell);
                 const base64 = await executeRemoteCommand(base64Cmd);
                 if (base64.trim()) {
                     setPreviewType('image');
@@ -6902,7 +6914,7 @@ export default function ModuleDetail({
                 setHexData([]);
             } else if (binaryExts.includes(ext)) {
                 // 二进制文件用 HexView
-                const hexCmd = `docker exec ${containerId} sh -c 'xxd -p "${file.fullPath}" 2>/dev/null | head -c 131072 || od -A n -t x1 "${file.fullPath}" 2>/dev/null | head -c 200000 | tr -d " \\n"'`;
+                const hexCmd = buildDockerShellCommand(containerId, `xxd -p ${quotePosixArg(file.fullPath)} 2>/dev/null | head -c 131072 || od -A n -t x1 ${quotePosixArg(file.fullPath)} 2>/dev/null | head -c 200000 | tr -d ' \\n'`, dockerHostShell);
                 const hexStr = await executeRemoteCommand(hexCmd);
                 if (hexStr.trim()) {
                     setPreviewType('hex');
@@ -6920,7 +6932,7 @@ export default function ModuleDetail({
                 setImageBase64(null);
             } else if (tableExts.includes(ext)) {
                 // 表格预览 (CSV/TSV)
-                const content = await executeRemoteCommand(`docker exec ${containerId} cat "${file.fullPath}" 2>/dev/null`);
+                const content = await executeRemoteCommand(buildDockerShellCommand(containerId, `cat ${quotePosixArg(file.fullPath)} 2>/dev/null`, dockerHostShell));
                 if (content) {
                     setPreviewType('table');
                     setFileContent(content);
@@ -6931,7 +6943,7 @@ export default function ModuleDetail({
                 setHexData([]);
             } else {
                 // 默认使用文本预览
-                const content = await executeRemoteCommand(`docker exec ${containerId} cat "${file.fullPath}" 2>/dev/null`);
+                const content = await executeRemoteCommand(buildDockerShellCommand(containerId, `cat ${quotePosixArg(file.fullPath)} 2>/dev/null`, dockerHostShell));
                 setFileContent(content || '文件为空或容器未运行');
                 setImageBase64(null);
                 setHexData([]);
@@ -7248,7 +7260,7 @@ export default function ModuleDetail({
         setLoading(true);
         setDockerContainerId(containerId);
         try {
-            const cmd = `docker inspect ${quoteDockerArg(containerId)} 2>&1`;
+            const cmd = `docker inspect ${quoteDockerHostArg(containerId, dockerHostShell)} 2>&1`;
             const output = await executeRemoteCommand(cmd);
             try {
                 const data = JSON.parse(output);
@@ -7267,8 +7279,7 @@ export default function ModuleDetail({
     const loadDockerDirectory = async (containerId: string, path: string) => {
         setLoading(true);
         try {
-            const safePath = path.replace(/'/g, "'\\''");
-            const cmd = buildDockerShellCommand(containerId, `ls -la '${safePath}' | head -200`);
+            const cmd = buildDockerShellCommand(containerId, `ls -la ${quotePosixArg(path)} | head -200`, dockerHostShell);
             const output = await executeRemoteCommand(cmd);
 
             if (!output || output.includes('Error')) {
@@ -7334,7 +7345,7 @@ export default function ModuleDetail({
         setDockerCommandRunning(true);
         setDockerCommandOutput('正在执行...');
         try {
-            const output = await executeRemoteCommand(buildDockerShellCommand(containerId, command));
+            const output = await executeRemoteCommand(buildDockerShellCommand(containerId, command, dockerHostShell));
             setDockerCommandOutput(output || '命令无输出');
         } catch (error) {
             setDockerCommandOutput(`执行失败: ${error}`);
@@ -7382,7 +7393,7 @@ export default function ModuleDetail({
             icon: <FileSearchOutlined />,
             label: '查看日志',
             onClick: async () => {
-                const cmd = `docker logs --tail 200 ${quoteDockerArg(record.container_id)} 2>&1`;
+                const cmd = `docker logs --tail 200 ${quoteDockerHostArg(record.container_id, dockerHostShell)} 2>&1`;
                 const output = await executeRemoteCommand(cmd);
                 setFileContent(output);
                 setPreviewFileName(`${record.container_id} 日志`);
@@ -7416,6 +7427,81 @@ export default function ModuleDetail({
             onClick: () => openDockerCommandPanel(record.container_id, 'advanced'),
         },
     ];
+
+    const renderDockerActions = (record: any) => {
+        if (!record.isContainerRecord) return null;
+
+        const isRunning = record.status?.includes('Up');
+        const showLogs = async () => {
+            const cmd = `docker logs --tail 200 ${quoteDockerHostArg(record.container_id, dockerHostShell)} 2>&1`;
+            const output = await executeRemoteCommand(cmd);
+            setFileContent(output);
+            setPreviewFileName(`${record.container_id} 日志`);
+            setPreviewType('text');
+            setPreviewModalOpen(true);
+        };
+
+        return (
+            <Space size={2} wrap={false} className="docker-action-strip">
+                <Button
+                    size="small"
+                    type="text"
+                    icon={<EyeOutlined />}
+                    aria-label="查看容器详情"
+                    title="查看容器详情"
+                    onClick={() => loadDockerInspect(record.container_id)}
+                />
+                <Button
+                    size="small"
+                    type="text"
+                    icon={<FolderOpenOutlined />}
+                    aria-label="浏览容器文件"
+                    title="浏览容器文件"
+                    disabled={!isRunning}
+                    onClick={() => {
+                        setDockerContainerId(record.container_id);
+                        loadDockerDirectory(record.container_id, '/');
+                    }}
+                />
+                <Button
+                    size="small"
+                    type="text"
+                    icon={<FileSearchOutlined />}
+                    aria-label="查看容器日志"
+                    title="查看容器日志"
+                    onClick={showLogs}
+                />
+                <Button
+                    size="small"
+                    aria-label="运行只读检查"
+                    disabled={!isRunning}
+                    onClick={() => {
+                        openDockerCommandPanel(record.container_id, 'readonly');
+                        runDockerContainerCommand(record.container_id, dockerReadOnlyCommands[0].command);
+                    }}
+                >
+                    只读
+                </Button>
+                <Button
+                    size="small"
+                    aria-label="执行容器命令"
+                    disabled={!isRunning}
+                    onClick={() => openDockerCommandPanel(record.container_id, 'advanced')}
+                >
+                    执行
+                </Button>
+                <Dropdown menu={{ items: getDockerContextMenu(record) }} trigger={['click']}>
+                    <Button
+                        size="small"
+                        type="text"
+                        icon={<MoreOutlined />}
+                        aria-label={`分析 ${record.names || record.container_id}`}
+                        title="更多操作"
+                    />
+                </Dropdown>
+            </Space>
+        );
+    };
 
     const formatFileSize = (bytes: number): string => {
         if (bytes === 0) return '0 B';
@@ -8547,19 +8633,11 @@ export default function ModuleDetail({
                 },
                 { title: '端口', dataIndex: 'ports', ellipsis: true },
                 {
-                    title: '操作', key: 'action', width: 90, fixed: 'right' as const,
-                    render: (_: any, record: any) => record.isContainerRecord ? (
-                        <Dropdown menu={{ items: getDockerContextMenu(record) }} trigger={['click']}>
-                            <Button
-                                size="small"
-                                type="text"
-                                icon={<MoreOutlined />}
-                                aria-label={`分析 ${record.names || record.container_id}`}
-                            >
-                                分析
-                            </Button>
-                        </Dropdown>
-                    ) : null
+                    title: '操作',
+                    key: 'action',
+                    width: 230,
+                    fixed: 'right' as const,
+                    render: (_: any, record: any) => renderDockerActions(record),
                 },
             ],
             docker_images: [
@@ -9187,6 +9265,13 @@ export default function ModuleDetail({
                 { title: '状态', dataIndex: 'status', width: 150, filters: [{text:'运行中', value:'Up'}, {text:'已停止', value:'Exited'}], onFilter: (v:any, r:any) => r.status?.includes(v) },
                 { title: '端口', dataIndex: 'ports', width: 150, ellipsis: true },
                 { title: '名称', dataIndex: 'names', width: 150 },
+                {
+                    title: '操作',
+                    key: 'action',
+                    width: 230,
+                    fixed: 'right' as const,
+                    render: (_: any, record: any) => renderDockerActions(record),
+                },
             ],
             docker_images: [
                 { title: '仓库', dataIndex: 'repository', width: 200, ellipsis: true },
@@ -11392,6 +11477,197 @@ export default function ModuleDetail({
             { title: '时间', dataIndex: 'addtime', key: 'addtime', width: 180 },
         ];
 
+        const ensurePanelRows = (rows: any[]) => rows.map((row, index) => ({
+            ...row,
+            key: row.key ?? row.id ?? index,
+        }));
+        const panelMetrics = [
+            { key: 'sites', label: '站点', value: sites.length },
+            { key: 'databases', label: '数据库', value: databases.length },
+            { key: 'ftps', label: 'FTP', value: ftps.length },
+            { key: 'tasks', label: '任务', value: tasks.length + crontabs.length },
+            { key: 'firewall', label: '端口规则', value: firewall.length },
+            { key: 'logs', label: '日志线索', value: logs.length + panelLogs.length },
+        ];
+        const firstSite = sites[0];
+        const firstDatabase = databases[0];
+        const firstFirewall = firewall[0];
+        const firstLog = logs[0]?.log || panelLogs.find((line: string) => line.trim());
+        const panelSummaryItems = [
+            { label: '主站点', value: `${sites.length}`, detail: firstSite?.path || firstSite?.ps || '' },
+            { label: '数据库', value: `${databases.length}`, detail: firstDatabase?.username || firstDatabase?.ps || '' },
+            { label: '暴露端口', value: `${firewall.length}`, detail: firstFirewall?.ps || firstFirewall?.type || '' },
+            { label: '最近日志', value: firstLog ? '有记录' : '-', detail: logs[0]?.addtime || '' },
+        ];
+        const modernPanelTabItems = [
+            {
+                key: 'sites',
+                label: `站点 ${sites.length}`,
+                children: (
+                    <div className="linux-panel-table linux-module-table">
+                        <Table
+                            dataSource={ensurePanelRows(sites)}
+                            columns={[
+                                { title: '站点', dataIndex: 'name', key: 'name', width: 180, render: (value: string) => <Text strong>{value || '-'}</Text> },
+                                { title: '路径', dataIndex: 'path', key: 'path', ellipsis: true, render: (value: string) => <Text code>{value || '-'}</Text> },
+                                { title: '状态', dataIndex: 'status', key: 'status', width: 90, render: (value: string) => <Tag color={value === '1' ? 'green' : 'default'}>{value === '1' ? '运行' : value || '-'}</Tag> },
+                                { title: '备注', dataIndex: 'ps', key: 'ps', ellipsis: true },
+                            ]}
+                            size="small"
+                            pagination={{ pageSize: 10 }}
+                        />
+                    </div>
+                ),
+            },
+            {
+                key: 'databases',
+                label: `数据库 ${databases.length}`,
+                children: (
+                    <div className="linux-panel-table linux-module-table">
+                        <Table
+                            dataSource={ensurePanelRows(databases)}
+                            columns={[
+                                { title: '数据库', dataIndex: 'name', key: 'name', width: 160, render: (value: string) => <Text strong>{value || '-'}</Text> },
+                                { title: '用户', dataIndex: 'username', key: 'username', width: 140 },
+                                { title: '访问控制', dataIndex: 'accept', key: 'accept', width: 130, render: (value: string) => <Tag color={value === '127.0.0.1' ? 'orange' : 'green'}>{value || '-'}</Tag> },
+                                { title: '备注', dataIndex: 'ps', key: 'ps', ellipsis: true },
+                            ]}
+                            size="small"
+                            pagination={{ pageSize: 10 }}
+                        />
+                    </div>
+                ),
+            },
+            {
+                key: 'tasks',
+                label: `任务 ${tasks.length + crontabs.length}`,
+                children: (
+                    <div className="linux-panel-table linux-module-table">
+                        <Table
+                            dataSource={ensurePanelRows([...tasks, ...crontabs])}
+                            columns={[
+                                { title: '任务', dataIndex: 'name', key: 'name', width: 200, ellipsis: true },
+                                { title: '类型', dataIndex: 'type', key: 'type', width: 110, render: (value: string) => <Tag>{value || 'shell'}</Tag> },
+                                { title: '状态', dataIndex: 'status', key: 'status', width: 90, render: (value: string) => <Tag color={value === '1' ? 'green' : 'default'}>{value === '1' ? '启用' : value || '-'}</Tag> },
+                                { title: '命令', dataIndex: 'execstr', key: 'execstr', ellipsis: true, render: (value: string, row: any) => <Text code>{value || row.sBody || '-'}</Text> },
+                            ]}
+                            size="small"
+                            pagination={{ pageSize: 10 }}
+                            scroll={{ x: 760 }}
+                        />
+                    </div>
+                ),
+            },
+            {
+                key: 'firewall',
+                label: `端口 ${firewall.length}`,
+                children: (
+                    <div className="linux-panel-table linux-module-table">
+                        <Table
+                            dataSource={ensurePanelRows(firewall)}
+                            columns={[
+                                { title: '端口', dataIndex: 'port', key: 'port', width: 120, render: (value: string) => <Tag color="volcano">{value || '-'}</Tag> },
+                                { title: '协议', dataIndex: 'type', key: 'type', width: 100 },
+                                { title: '备注', dataIndex: 'ps', key: 'ps', ellipsis: true },
+                                { title: '时间', dataIndex: 'addtime', key: 'addtime', width: 160 },
+                            ]}
+                            size="small"
+                            pagination={{ pageSize: 10 }}
+                        />
+                    </div>
+                ),
+            },
+            {
+                key: 'logs',
+                label: `日志 ${logs.length + panelLogs.length}`,
+                children: (
+                    <div className="linux-panel-log-grid">
+                        {logs.length > 0 && (
+                            <div className="linux-panel-table linux-module-table">
+                                <Table
+                                    dataSource={ensurePanelRows(logs)}
+                                    columns={[
+                                        { title: '类型', dataIndex: 'type', key: 'type', width: 130, render: (value: string) => <Tag>{value || 'panel'}</Tag> },
+                                        { title: '内容', dataIndex: 'log', key: 'log', ellipsis: true },
+                                        { title: '时间', dataIndex: 'addtime', key: 'addtime', width: 180 },
+                                    ]}
+                                    size="small"
+                                    pagination={{ pageSize: 10 }}
+                                />
+                            </div>
+                        )}
+                        {panelLogs.length > 0 && (
+                            <pre className="linux-panel-log-stream">
+                                {panelLogs.map((line: string, index: number) => (
+                                    <span
+                                        key={`${index}-${line}`}
+                                        className={line.toLowerCase().includes('error') || line.toLowerCase().includes('fail') ? 'linux-panel-log-error' : undefined}
+                                    >
+                                        {line}
+                                    </span>
+                                ))}
+                            </pre>
+                        )}
+                    </div>
+                ),
+            },
+            {
+                key: 'config',
+                label: `配置 ${config.length}`,
+                children: (
+                    <div className="linux-panel-table linux-module-table">
+                        <Table
+                            dataSource={ensurePanelRows(config)}
+                            columns={[
+                                { title: '配置项', dataIndex: 'label', key: 'label', width: 180 },
+                                { title: '值', dataIndex: 'value', key: 'value', render: (value: string) => <Text code>{value || '-'}</Text> },
+                            ]}
+                            size="small"
+                            pagination={false}
+                        />
+                    </div>
+                ),
+            },
+        ];
+
+        return (
+            <div className="linux-panel-workbench">
+                <div className="linux-panel-commandbar">
+                    <div className="linux-panel-title">
+                        <Text className="linux-evidence-kicker">WEB PANEL INVENTORY</Text>
+                        <Text strong className="linux-evidence-heading">面板资产与暴露面</Text>
+                    </div>
+                    <div className="linux-panel-status">
+                        <span>{sites.length + databases.length + firewall.length + logs.length} 条线索</span>
+                        <Tag color={hasPanel ? 'green' : 'default'}>{hasPanel ? '已识别' : '未识别'}</Tag>
+                    </div>
+                </div>
+
+                <div className="linux-panel-metrics">
+                    {panelMetrics.map((metric) => (
+                        <div className="linux-panel-metric" key={metric.key}>
+                            <span>{metric.label}</span>
+                            <strong>{metric.value}</strong>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="linux-panel-summary-grid">
+                    {panelSummaryItems.map((item) => (
+                        <div className="linux-panel-summary-item" key={item.label}>
+                            <span>{item.label}</span>
+                            <strong>{item.value}</strong>
+                            {item.detail ? <small>{item.detail}</small> : null}
+                        </div>
+                    ))}
+                </div>
+
+                <div className="linux-panel-tabs">
+                    <Tabs items={modernPanelTabItems} defaultActiveKey={sites.length > 0 ? 'sites' : 'config'} />
+                </div>
+            </div>
+        );
+
         const tabItems = [
             {
                 key: 'config',
@@ -11497,11 +11773,28 @@ export default function ModuleDetail({
             },
         ];
 
+        const workbenchTabItems = tabItems.map((item) => ({
+            ...item,
+            children: (
+                <div className="linux-panel-table linux-module-table">
+                    {item.children}
+                </div>
+            ),
+        }));
+
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {/* 概览统计卡片 - 浅色简洁风格 */}
-                <Card size="small" style={{ background: '#fafafa', border: '1px solid #f0f0f0' }}>
-                    <Row gutter={16}>
+            <div className={`linux-panel-workbench${isDarkMode ? ' linux-panel-workbench-dark' : ''}`}>
+                <div className="linux-panel-commandbar">
+                    <Space size={8} wrap>
+                        <Tag color={sites.length > 0 ? 'green' : 'default'}>站点 {sites.length}</Tag>
+                        <Tag color={databases.length > 0 ? 'blue' : 'default'}>数据库 {databases.length}</Tag>
+                        <Tag color={crontabs.length > 0 ? 'cyan' : 'default'}>计划任务 {crontabs.length}</Tag>
+                        <Tag color={logs.length > 0 || panelLogs.length > 0 ? 'orange' : 'default'}>日志 {logs.length + panelLogs.length}</Tag>
+                    </Space>
+                </div>
+
+                <div className="linux-panel-metrics">
+                    <Row gutter={[12, 8]}>
                         <Col span={3}>
                             <Statistic title={<span style={{ color: '#666' }}>配置项</span>} value={config.length} valueStyle={{ color: '#333', fontWeight: '500', fontSize: 20 }} />
                         </Col>
@@ -11527,12 +11820,11 @@ export default function ModuleDetail({
                             <Statistic title={<span style={{ color: '#666' }}>操作日志</span>} value={logs.length} valueStyle={{ color: '#fa8c16', fontWeight: '500', fontSize: 20 }} />
                         </Col>
                     </Row>
-                </Card>
+                </div>
 
-                {/* 详细信息标签页 */}
-                <Card bodyStyle={{ padding: '12px 16px' }}>
-                    <Tabs items={tabItems} size="small" defaultActiveKey={sites.length > 0 ? 'sites' : 'config'} />
-                </Card>
+                <div className="linux-panel-tabs">
+                    <Tabs items={workbenchTabItems} size="small" defaultActiveKey={sites.length > 0 ? 'sites' : 'config'} />
+                </div>
             </div>
         );
     };
