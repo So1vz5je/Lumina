@@ -11629,6 +11629,13 @@ export default function ModuleDetail({
                 ),
             },
         ];
+        const panelEvidenceItems = [
+            firstSite?.name ? { label: '站点', value: firstSite.name } : null,
+            firstSite?.path ? { label: '路径', value: firstSite.path } : null,
+            firstDatabase?.name ? { label: '数据库', value: firstDatabase.name } : null,
+            firstFirewall?.port ? { label: '端口', value: firstFirewall.port } : null,
+            firstLog ? { label: '日志', value: firstLog } : null,
+        ].filter(Boolean) as Array<{ label: string; value: string }>;
 
         return (
             <div className="linux-panel-workbench">
@@ -11661,6 +11668,17 @@ export default function ModuleDetail({
                         </div>
                     ))}
                 </div>
+
+                {panelEvidenceItems.length > 0 && (
+                    <div className="linux-panel-evidence-strip">
+                        {panelEvidenceItems.map((item) => (
+                            <span key={`${item.label}-${item.value}`}>
+                                <b>{item.label}</b>
+                                {item.value}
+                            </span>
+                        ))}
+                    </div>
+                )}
 
                 <div className="linux-panel-tabs">
                     <Tabs items={modernPanelTabItems} defaultActiveKey={sites.length > 0 ? 'sites' : 'config'} />
@@ -12916,6 +12934,7 @@ export default function ModuleDetail({
                     ? '连接中'
                     : '等待会话'
             : '命令模式';
+        const terminalSessionTitle = terminalSession?.title || 'analysis-shell';
         const terminalStatusClassName = terminalSession
             ? 'linux-terminal-status linux-terminal-status-connected'
             : 'linux-terminal-status';
@@ -12926,11 +12945,15 @@ export default function ModuleDetail({
                     <div className="linux-terminal-topbar">
                         <div className="linux-terminal-identity">
                             <span className={`linux-terminal-dot${terminalSession ? ' linux-terminal-dot-connected' : ''}`} />
-                            <span className="linux-terminal-name">SSH 交互终端</span>
+                            <span className="linux-terminal-name">SSH</span>
                             <span className={terminalStatusClassName}>{terminalStatusLabel}</span>
                             {mode === 'remote' && privilegeMode !== 'none' && (
                                 <span className="linux-terminal-privilege">{privilegeMode}</span>
                             )}
+                        </div>
+                        <div className="linux-terminal-session">
+                            <span>{terminalSession ? terminalSessionTitle : '等待远程会话'}</span>
+                            <small>{terminalSession?.cwd || terminalPath}</small>
                         </div>
                         <Button
                             type="text"

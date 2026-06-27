@@ -2488,6 +2488,7 @@ body {
 .analysis-workbench .analysis-content.linux-remote-content {
   background: linear-gradient(180deg, #edf7f4 0%, #f6fbf8 22%, #f4f7fb 100%) !important;
   padding: 0 !important;
+  position: relative;
 }
 
 .analysis-workbench.dark .analysis-content.linux-remote-content {
@@ -3561,11 +3562,11 @@ body {
 .analysis-workbench .analysis-content.linux-remote-content > .analysis-module-view[data-module-key="terminal"] {
   height: 100%;
   min-height: 0;
-  background: #edf4f2 !important;
+  background: #f4f7f5 !important;
 }
 
 .analysis-workbench.dark .analysis-content.linux-remote-content > .analysis-module-view[data-module-key="terminal"] {
-  background: #071012 !important;
+  background: #080d10 !important;
 }
 
 .analysis-workbench .linux-terminal-shell,
@@ -3575,29 +3576,29 @@ body {
   flex: 1 1 auto;
   height: 100%;
   min-height: 0;
-  background: #edf4f2 !important;
+  background: #f4f7f5 !important;
 }
 
 .analysis-workbench.dark .linux-terminal-shell,
 .analysis-workbench.dark .linux-terminal-workspace {
-  background: #071012 !important;
+  background: #080d10 !important;
 }
 
 .analysis-workbench .linux-terminal-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex: 0 0 auto;
-  gap: 12px;
-  min-height: 36px;
-  padding: 6px 12px;
+  flex: 0 0 34px;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 12px;
   border-bottom: 1px solid rgba(20, 83, 45, 0.1);
-  background: #eaf3ef;
+  background: #eef5f2;
 }
 
 .analysis-workbench.dark .linux-terminal-topbar {
-  border-bottom-color: rgba(148, 163, 184, 0.12);
-  background: #0a1116;
+  border-bottom-color: rgba(148, 163, 184, 0.10);
+  background: #0b1115;
 }
 
 .analysis-workbench .linux-terminal-identity {
@@ -3629,25 +3630,26 @@ body {
 .analysis-workbench .linux-terminal-name {
   overflow: hidden;
   color: inherit;
-  font-weight: 650;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .analysis-workbench .linux-terminal-status,
 .analysis-workbench .linux-terminal-privilege {
-  padding: 1px 7px;
-  border: 1px solid rgba(20, 83, 45, 0.12);
-  border-radius: 999px;
-  background: rgba(248, 252, 250, 0.7);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: #4b635c;
   font-size: 11px;
   line-height: 18px;
 }
 
 .analysis-workbench .linux-terminal-status-connected {
-  border-color: rgba(16, 185, 129, 0.22);
-  background: rgba(16, 185, 129, 0.08);
   color: #047857;
 }
 
@@ -3666,6 +3668,10 @@ body {
 
 .analysis-workbench .linux-terminal-action.ant-btn {
   color: #45665d;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 5px;
+  font-size: 12px;
 }
 
 .analysis-workbench .linux-terminal-action.ant-btn:hover {
@@ -3689,11 +3695,11 @@ body {
   min-height: 0;
   overflow: hidden;
   padding: 0 !important;
-  background: #edf4f2 !important;
+  background: #f4f7f5 !important;
 }
 
 .analysis-workbench.dark .linux-terminal-body {
-  background: #071012 !important;
+  background: #080d10 !important;
 }
 
 .analysis-workbench .linux-remote-terminal {
@@ -3701,20 +3707,53 @@ body {
   height: 100% !important;
   min-height: 0;
   border-radius: 0 !important;
-  padding: 10px 12px !important;
+  padding: 8px 12px !important;
   line-height: 1.5 !important;
 }
 
 .analysis-workbench .linux-remote-terminal-light {
   border: 0 !important;
-  background: #f8fcfa !important;
+  background: #fbfdfb !important;
   box-shadow: none !important;
 }
 
 .analysis-workbench .linux-remote-terminal-dark {
   border: 0 !important;
-  background: #071012 !important;
+  background: #080d10 !important;
   box-shadow: none !important;
+}
+
+.analysis-workbench .linux-terminal-session {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 8px;
+  color: #526d64;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.analysis-workbench.dark .linux-terminal-session {
+  color: #8aa39b;
+}
+
+.analysis-workbench .linux-terminal-session span,
+.analysis-workbench .linux-terminal-session small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-workbench .linux-terminal-session small {
+  color: #789189;
+  font-size: 11px;
+}
+
+.analysis-workbench.dark .linux-terminal-session small {
+  color: #6f8b84;
 }
 
 .analysis-workbench .linux-xterm-host {
@@ -4455,6 +4494,44 @@ body {
 }
 
 .analysis-workbench.dark .linux-panel-summary-item small {
+  color: #8aa39b;
+}
+
+.analysis-workbench .linux-panel-evidence-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.analysis-workbench .linux-panel-evidence-strip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(20, 83, 45, 0.10);
+  border-radius: 6px;
+  background: rgba(236, 253, 245, 0.62);
+  color: #243d36;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.analysis-workbench .linux-panel-evidence-strip b {
+  color: #5f756e;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.analysis-workbench.dark .linux-panel-evidence-strip span {
+  border-color: rgba(94, 234, 212, 0.12);
+  background: rgba(13, 40, 35, 0.46);
+  color: #d8e8e2;
+}
+
+.analysis-workbench.dark .linux-panel-evidence-strip b {
   color: #8aa39b;
 }
 

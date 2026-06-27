@@ -84,6 +84,14 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 }));
 
 beforeAll(() => {
+  const originalGetComputedStyle = window.getComputedStyle.bind(window);
+  const getComputedStyleMock = vi.fn((element: Element) => originalGetComputedStyle(element));
+  Object.defineProperty(window, 'getComputedStyle', {
+    writable: true,
+    value: getComputedStyleMock,
+  });
+  vi.stubGlobal('getComputedStyle', getComputedStyleMock);
+
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
@@ -1007,6 +1015,12 @@ describe('ModuleDetail Linux remote module rendering', () => {
       expect(container.querySelector('.ant-card')).not.toBeInTheDocument();
       expect(screen.getAllByText('app.example.com').length).toBeGreaterThan(0);
       expect(screen.getAllByText('/www/wwwroot/app').length).toBeGreaterThan(0);
+    });
+
+    const panelTabs = screen.getAllByRole('tab');
+    fireEvent.click(panelTabs[1]);
+
+    await waitFor(() => {
       expect(screen.getAllByText('appdb').length).toBeGreaterThan(0);
       expect(screen.getAllByText('8888').length).toBeGreaterThan(0);
       expect(screen.getAllByText(/root login from 203\.0\.113\.10/).length).toBeGreaterThan(0);
