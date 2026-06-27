@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use ssh2::Session;
-use std::io::Read;
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshConfig {
@@ -37,6 +41,7 @@ pub struct CommandResult {
 
 pub struct SshClient {
     session: Session,
+    config: SshConfig,
 }
 
 impl SshClient {
@@ -72,10 +77,14 @@ impl SshClient {
             return Err("璁よ瘉澶辫触".to_string());
         }
 
-        Ok(SshClient { session })
+        Ok(SshClient {
+            session,
+            config: config.clone(),
+        })
     }
 
     pub fn execute(&self, command: &str) -> Result<CommandResult, String> {
+        self.session.set_blocking(true);
         let mut channel = self
             .session
             .channel_session()
@@ -112,6 +121,128 @@ impl SshClient {
             stderr,
             exit_code,
         })
+    }
+
+    pub fn spawn_interactive_shell(
+        self: Arc<Self>,
+        app: AppHandle,
+        connection_id: String,
+        session_id: String,
+        cols: u32,
+        rows: u32,
+    ) -> Result<mpsc::Sender<Vec<u8>>, String> {
+        let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+        let terminal_config = self.config.clone();
+        let thread_session_id = session_id.clone();
+        let thread_connection_id = connection_id.clone();
+
+        thread::Builder::new()
+            .name(format!("ssh-terminal-{}", session_id))
+            .spawn(move || {
+                let run_result = (|| -> Result<(), String> {
+                    let terminal_client = SshClient::connect(&terminal_config)?;
+                    terminal_client.session.set_blocking(false);
+                    let mut channel = terminal_client
+                        .session
+                        .channel_session()
+                        .map_err(|e| format!("创建交互式终端通道失败: {}", e))?;
+                    channel
+                        .request_pty("xterm-256color", None, Some((cols, rows, 0, 0)))
+                        .map_err(|e| format!("请求远程 PTY 失败: {}", e))?;
+                    channel
+                        .shell()
+                        .map_err(|e| format!("启动远程 shell 失败: {}", e))?;
+                    let _ = ready_tx.send(Ok(()));
+
+                    let mut buffer = [0_u8; 8192];
+                    loop {
+                        loop {
+                            match channel.read(&mut buffer) {
+                                Ok(0) => break,
+                                Ok(read_len) => {
+                                    let data =
+                                        String::from_utf8_lossy(&buffer[..read_len]).to_string();
+                                    let _ = app.emit(
+                                        "remote://terminal-stream",
+                                        serde_json::json!({
+                                            "connectionId": thread_connection_id,
+                                            "sessionId": thread_session_id,
+                                            "data": data,
+                                        }),
+                                    );
+                                }
+                                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                                Err(error) => {
+                                    let _ = app.emit(
+                                        "remote://terminal-error",
+                                        serde_json::json!({
+                                            "connectionId": thread_connection_id,
+                                            "sessionId": thread_session_id,
+                                            "error": error.to_string(),
+                                        }),
+                                    );
+                                    return Err(format!("读取远程终端输出失败: {}", error));
+                                }
+                            }
+                        }
+
+                        match input_rx.recv_timeout(Duration::from_millis(12)) {
+                            Ok(data) => {
+                                let mut written = 0;
+                                while written < data.len() {
+                                    match channel.write(&data[written..]) {
+                                        Ok(0) => thread::sleep(Duration::from_millis(2)),
+                                        Ok(count) => written += count,
+                                        Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                                            thread::sleep(Duration::from_millis(2));
+                                        }
+                                        Err(error) => {
+                                            let _ = app.emit(
+                                                "remote://terminal-error",
+                                                serde_json::json!({
+                                                    "connectionId": thread_connection_id,
+                                                    "sessionId": thread_session_id,
+                                                    "error": error.to_string(),
+                                                }),
+                                            );
+                                            return Err(format!("写入远程终端失败: {}", error));
+                                        }
+                                    }
+                                }
+                                let _ = channel.flush();
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+
+                        if channel.eof() {
+                            break;
+                        }
+                    }
+
+                    let _ = channel.close();
+                    let _ = app.emit(
+                        "remote://terminal-closed",
+                        serde_json::json!({
+                            "connectionId": thread_connection_id,
+                            "sessionId": thread_session_id,
+                        }),
+                    );
+                    Ok(())
+                })();
+
+                if let Err(error) = run_result {
+                    let _ = ready_tx.send(Err(error));
+                }
+            })
+            .map_err(|e| format!("启动远程终端线程失败: {}", e))?;
+
+        ready_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| "等待远程终端启动超时".to_string())??;
+
+        Ok(input_tx)
     }
 
     pub fn detect_os(&self) -> Result<String, String> {

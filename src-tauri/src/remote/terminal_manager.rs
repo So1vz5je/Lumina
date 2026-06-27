@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::mpsc::Sender;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +25,7 @@ pub struct TerminalOutputEvent {
 #[derive(Default)]
 pub struct TerminalManager {
     sessions: HashMap<String, RemoteTerminalSession>,
+    input_senders: HashMap<String, Sender<Vec<u8>>>,
     session_order: Vec<String>,
     next_session_index: u64,
 }
@@ -59,8 +61,33 @@ impl TerminalManager {
             return Err(format!("Terminal session not found: {}", session_id));
         }
 
+        self.input_senders.remove(session_id);
         self.session_order.retain(|id| id != session_id);
         Ok(())
+    }
+
+    pub fn attach_input_sender(
+        &mut self,
+        session_id: String,
+        sender: Sender<Vec<u8>>,
+    ) -> Result<(), String> {
+        if !self.sessions.contains_key(&session_id) {
+            return Err(format!("Terminal session not found: {}", session_id));
+        }
+
+        self.input_senders.insert(session_id, sender);
+        Ok(())
+    }
+
+    pub fn send_input(&self, session_id: &str, data: Vec<u8>) -> Result<(), String> {
+        let sender = self
+            .input_senders
+            .get(session_id)
+            .ok_or_else(|| format!("Interactive terminal session not found: {}", session_id))?;
+
+        sender
+            .send(data)
+            .map_err(|err| format!("Failed to send terminal input: {}", err))
     }
 
     pub fn close_sessions_for_connection(&mut self, connection_id: &str) -> usize {

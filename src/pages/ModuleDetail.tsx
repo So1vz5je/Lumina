@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { Card, Row, Col, Progress, Typography, Descriptions, Spin, Table, Tag, List, Input, Button, Space, Statistic, Checkbox, Popover, Dropdown, Modal, Select, Upload, message, Empty, Tabs, Switch, Alert, Collapse, Pagination } from 'antd';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { ReloadOutlined, UserOutlined, ApiOutlined, DatabaseOutlined, DesktopOutlined, SettingOutlined, DownloadOutlined, EyeOutlined, NumberOutlined, UploadOutlined, MoreOutlined, SearchOutlined, FileSearchOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile, exists } from '@tauri-apps/plugin-fs';
@@ -20,6 +21,25 @@ import type {
     WindowsDatabaseTableRef,
 } from '../modules/windowsDatabase/types';
 import { isTauriRuntime } from '../utils/runtime';
+
+interface RemoteInteractiveTerminalSession {
+    id: string;
+    connectionId: string;
+    title: string;
+    cwd: string;
+}
+
+interface RemoteTerminalStreamEvent {
+    connectionId: string;
+    sessionId: string;
+    data: string;
+}
+
+interface RemoteTerminalErrorEvent {
+    connectionId: string;
+    sessionId: string;
+    error: string;
+}
 
 const { Title, Text } = Typography;
 
@@ -141,6 +161,8 @@ const WINDOWS_DATABASE_DEFAULT_PORTS: Record<WindowsDatabaseEngine, number> = {
 const EVERYTHING_SEARCH_DEBOUNCE_MS = 250;
 const EVERYTHING_LIVE_MAX_RESULTS = 50;
 const MIN_EVERYTHING_LIVE_QUERY_LENGTH = 2;
+const TERMINAL_HISTORY_LIMIT = 300;
+const TERMINAL_OUTPUT_MAX_CHARS = 60_000;
 const EVERYTHING_HASH_ALGORITHMS = [
     { label: 'MD5', value: 'md5' },
     { label: 'SHA1', value: 'sha1' },
@@ -1932,6 +1954,21 @@ export default function ModuleDetail({
         : isLinuxRemoteMode
             ? 'linux-module-body'
             : undefined;
+    const dataWorkbenchClassName = isLinuxRemoteMode ? 'linux-data-workbench' : 'windows-data-workbench';
+    const dataToolbarClassName = isLinuxRemoteMode ? 'linux-data-toolbar' : 'windows-data-toolbar';
+    const dataToolbarMainClassName = isLinuxRemoteMode ? 'linux-data-toolbar-main' : 'windows-data-toolbar-main';
+    const dataToolbarActionsClassName = isLinuxRemoteMode ? 'linux-data-toolbar-actions' : 'windows-data-toolbar-actions';
+    const dataSearchInputClassName = isLinuxRemoteMode ? 'linux-search-input' : 'windows-search-input';
+    const dataResultCountClassName = isLinuxRemoteMode ? 'linux-result-count' : 'windows-result-count';
+    const dataTableFrameClassName = isLinuxRemoteMode ? 'linux-data-table-frame' : 'windows-data-table-frame';
+    const dataFilterEmptyClassName = isLinuxRemoteMode ? 'linux-filter-empty' : 'windows-filter-empty';
+    const dataFilterEmptyCopyClassName = isLinuxRemoteMode ? 'linux-filter-empty-copy' : 'windows-filter-empty-copy';
+    const emptyStateClassName = isLinuxRemoteMode ? 'linux-empty-state' : 'windows-empty-state';
+    const moduleTableClassName = isLinuxRemoteMode
+        ? 'linux-module-table'
+        : isWindowsLocalMode
+            ? 'windows-module-table'
+            : undefined;
     const effectiveModuleKey = moduleKey === 'software' ? 'installed_software' : moduleKey;
     const windowsMeta = isWindowsLocalMode ? getWindowsModuleMeta(moduleKey) : undefined;
     const linuxMeta = isLinuxRemoteMode ? getLinuxModuleMeta(moduleKey) : undefined;
@@ -1990,11 +2027,13 @@ export default function ModuleDetail({
     const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
     const [terminalInput, setTerminalInput] = useState('');
     const [executing, setExecuting] = useState(false);
+    const [terminalSession, setTerminalSession] = useState<RemoteInteractiveTerminalSession | null>(null);
     const [terminalUser, setTerminalUser] = useState('user');
     const [terminalHost, setTerminalHost] = useState('host');
     const [terminalPath, setTerminalPath] = useState('~');
     const terminalRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const terminalSessionRef = useRef<RemoteInteractiveTerminalSession | null>(null);
 
     // 文件管理状态
     const [filePath, setFilePath] = useState('/');
@@ -2056,11 +2095,100 @@ export default function ModuleDetail({
         }
     }, [terminalOutput, moduleKey]);
 
-    // 初始化终端 - 获取用户名、主机名和当前路径
+    // 初始化终端 - 使用持久交互式 SSH shell，避免每条命令阻塞执行
     useEffect(() => {
-        if (moduleKey === 'terminal' && mode === 'remote') {
-            initTerminalPrompt();
+        if (moduleKey !== 'terminal' || mode !== 'remote') {
+            return;
         }
+
+        let cancelled = false;
+        let streamCleanup: (() => void) | undefined;
+        let errorCleanup: (() => void) | undefined;
+        let closedCleanup: (() => void) | undefined;
+
+        setTerminalOutput([]);
+        setTerminalSession(null);
+        terminalSessionRef.current = null;
+        setExecuting(true);
+
+        const openInteractiveTerminal = async () => {
+            try {
+                const streamUnlisten = await listen<RemoteTerminalStreamEvent>(
+                    'remote://terminal-stream',
+                    (event) => {
+                        const activeSession = terminalSessionRef.current;
+                        if (activeSession && event.payload.sessionId !== activeSession.id) return;
+                        appendTerminalOutput(event.payload.data);
+                    },
+                );
+                const errorUnlisten = await listen<RemoteTerminalErrorEvent>(
+                    'remote://terminal-error',
+                    (event) => {
+                        const activeSession = terminalSessionRef.current;
+                        if (activeSession && event.payload.sessionId !== activeSession.id) return;
+                        appendTerminalOutput(`\n[terminal] ${event.payload.error}\n`);
+                    },
+                );
+                const closedUnlisten = await listen<RemoteTerminalStreamEvent>(
+                    'remote://terminal-closed',
+                    (event) => {
+                        const activeSession = terminalSessionRef.current;
+                        if (activeSession && event.payload.sessionId !== activeSession.id) return;
+                        appendTerminalOutput('\n[terminal] session closed\n');
+                    },
+                );
+
+                if (cancelled) {
+                    streamUnlisten();
+                    errorUnlisten();
+                    closedUnlisten();
+                    return;
+                }
+
+                streamCleanup = streamUnlisten;
+                errorCleanup = errorUnlisten;
+                closedCleanup = closedUnlisten;
+
+                const session = await invoke<RemoteInteractiveTerminalSession>(
+                    'remote_open_active_terminal_session',
+                    {
+                        title: 'analysis-shell',
+                        cols: 120,
+                        rows: 34,
+                    },
+                );
+
+                if (cancelled) {
+                    await invoke('remote_close_terminal_session', { sessionId: session.id }).catch(() => undefined);
+                    return;
+                }
+
+                terminalSessionRef.current = session;
+                setTerminalSession(session);
+            } catch (error) {
+                appendTerminalOutput(`远程交互终端启动失败，已回退到命令模式: ${error}\n`);
+                await initTerminalPrompt();
+            } finally {
+                if (!cancelled) {
+                    setExecuting(false);
+                }
+            }
+        };
+
+        void openInteractiveTerminal();
+
+        return () => {
+            cancelled = true;
+            const session = terminalSessionRef.current;
+            terminalSessionRef.current = null;
+            setTerminalSession(null);
+            streamCleanup?.();
+            errorCleanup?.();
+            closedCleanup?.();
+            if (session) {
+                void invoke('remote_close_terminal_session', { sessionId: session.id });
+            }
+        };
     }, [moduleKey, mode]);
 
     const handleOpenWindowsDatabaseWorkbench = useCallback((record: unknown) => {
@@ -2154,17 +2282,25 @@ export default function ModuleDetail({
 
     const initTerminalPrompt = async () => {
         try {
-            const [hostOut, pwdOut] = await Promise.all([
-                executeRemoteCommand('hostname'),
-                executeRemoteCommand('pwd'),
-            ]);
-            // 如果使用sudo/su提权，则显示为root用户
-            if (privilegeMode === 'sudo' || privilegeMode === 'su') {
-                setTerminalUser('root');
-            } else {
-                const userOut = await executeRemoteCommand('whoami');
-                setTerminalUser(userOut.trim() || 'user');
-            }
+            const promptOut = await executeRemoteCommand([
+                `printf '__LUMINA_TERMINAL_HOST__\\n'; hostname 2>/dev/null`,
+                `printf '\\n__LUMINA_TERMINAL_PWD__\\n'; pwd 2>/dev/null`,
+                `printf '\\n__LUMINA_TERMINAL_USER__\\n'; whoami 2>/dev/null`,
+            ].join('; '));
+            const readSection = (name: string): string => {
+                const marker = `__LUMINA_TERMINAL_${name}__`;
+                const start = promptOut.indexOf(marker);
+                if (start < 0) return '';
+                const contentStart = start + marker.length;
+                const next = promptOut.indexOf('\n__LUMINA_TERMINAL_', contentStart);
+                return promptOut.slice(contentStart, next >= 0 ? next : undefined).trim();
+            };
+
+            const hostOut = readSection('HOST');
+            const pwdOut = readSection('PWD');
+            const userOut = readSection('USER');
+
+            setTerminalUser(privilegeMode === 'sudo' || privilegeMode === 'su' ? 'root' : (userOut || 'user'));
             setTerminalHost(hostOut.trim() || 'host');
             setTerminalPath(pwdOut.trim() || '~');
         } catch (e) {
@@ -2381,20 +2517,42 @@ export default function ModuleDetail({
 
     const loadRemoteSystemInfo = async () => {
         try {
-            const [hostnameOut, osReleaseOut, uptimeOut, memOut, dfOut, cpuOut, ipOut, kernelOut, archOut, cpuModelOut, issueOut, redhatReleaseOut] = await Promise.all([
-                executeRemoteCommand('hostname'),
-                executeRemoteCommand('cat /etc/os-release 2>/dev/null'),
-                executeRemoteCommand('uptime'),
-                executeRemoteCommand('free -h | grep Mem'),
-                executeRemoteCommand('df -h | grep -E "^/dev"'),
-                executeRemoteCommand('nproc'),
-                executeRemoteCommand('hostname -I 2>/dev/null | awk \'{print $1}\' || ip addr show | grep "inet " | head -1 | awk \'{print $2}\''),
-                executeRemoteCommand('uname -r'),
-                executeRemoteCommand('uname -m'),
-                executeRemoteCommand('cat /proc/cpuinfo | grep "model name" | head -1 | cut -d: -f2'),
-                executeRemoteCommand('cat /etc/issue 2>/dev/null | head -1'),
-                executeRemoteCommand('cat /etc/redhat-release 2>/dev/null || cat /etc/centos-release 2>/dev/null || cat /etc/system-release 2>/dev/null'),
-            ]);
+            const systemInfoOut = await executeRemoteCommand([
+                `printf '__LUMINA_HOSTNAME__\\n'; hostname 2>/dev/null`,
+                `printf '\\n__LUMINA_OS_RELEASE__\\n'; cat /etc/os-release 2>/dev/null`,
+                `printf '\\n__LUMINA_UPTIME__\\n'; uptime 2>/dev/null`,
+                `printf '\\n__LUMINA_MEMORY__\\n'; free -h 2>/dev/null | grep Mem`,
+                `printf '\\n__LUMINA_DISKS__\\n'; df -h 2>/dev/null | grep -E "^/dev"`,
+                `printf '\\n__LUMINA_CPU_CORES__\\n'; nproc 2>/dev/null`,
+                `printf '\\n__LUMINA_IP_ADDRESS__\\n'; hostname -I 2>/dev/null | awk '{print $1}' || ip addr show 2>/dev/null | grep "inet " | head -1 | awk '{print $2}'`,
+                `printf '\\n__LUMINA_KERNEL__\\n'; uname -r 2>/dev/null`,
+                `printf '\\n__LUMINA_ARCH__\\n'; uname -m 2>/dev/null`,
+                `printf '\\n__LUMINA_CPU_MODEL__\\n'; grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2`,
+                `printf '\\n__LUMINA_ISSUE__\\n'; head -1 /etc/issue 2>/dev/null`,
+                `printf '\\n__LUMINA_REDHAT_RELEASE__\\n'; cat /etc/redhat-release 2>/dev/null || cat /etc/centos-release 2>/dev/null || cat /etc/system-release 2>/dev/null`,
+            ].join('; '));
+
+            const readSection = (name: string): string => {
+                const marker = `__LUMINA_${name}__`;
+                const start = systemInfoOut.indexOf(marker);
+                if (start < 0) return '';
+                const contentStart = start + marker.length;
+                const next = systemInfoOut.indexOf('\n__LUMINA_', contentStart);
+                return systemInfoOut.slice(contentStart, next >= 0 ? next : undefined).trim();
+            };
+
+            const hostnameOut = readSection('HOSTNAME');
+            const osReleaseOut = readSection('OS_RELEASE');
+            const uptimeOut = readSection('UPTIME');
+            const memOut = readSection('MEMORY');
+            const dfOut = readSection('DISKS');
+            const cpuOut = readSection('CPU_CORES');
+            const ipOut = readSection('IP_ADDRESS');
+            const kernelOut = readSection('KERNEL');
+            const archOut = readSection('ARCH');
+            const cpuModelOut = readSection('CPU_MODEL');
+            const issueOut = readSection('ISSUE');
+            const redhatReleaseOut = readSection('REDHAT_RELEASE');
 
             // 解析 os-release 的所有字段
             const osReleaseMap: Record<string, string> = {};
@@ -6148,14 +6306,37 @@ export default function ModuleDetail({
         }
     };
 
+    const appendTerminalOutput = (line: string) => {
+        const normalizedLine = line.length > TERMINAL_OUTPUT_MAX_CHARS
+            ? `${line.slice(0, TERMINAL_OUTPUT_MAX_CHARS)}\n... output truncated for terminal performance`
+            : line;
+        setTerminalOutput(prev => [...prev, normalizedLine].slice(-TERMINAL_HISTORY_LIMIT));
+    };
+
     const handleTerminalCommand = async () => {
         if (!terminalInput.trim()) return;
+        const activeInteractiveSession = terminalSessionRef.current || terminalSession;
+
+        if (activeInteractiveSession) {
+            const command = terminalInput;
+            setTerminalInput('');
+            try {
+                await invoke('remote_send_terminal_input', {
+                    sessionId: activeInteractiveSession.id,
+                    data: `${command}\n`,
+                });
+            } catch (error) {
+                appendTerminalOutput(`\n[terminal] 输入发送失败: ${error}\n`);
+            }
+            return;
+        }
+
         setExecuting(true);
 
         // 构建完整的Kali风格提示符
         const prompt = terminalUser === 'root' ? '#' : '$';
         const promptLine = `(${terminalUser}@${terminalHost})-[${terminalPath}]${prompt} ${terminalInput}`;
-        setTerminalOutput(prev => [...prev, promptLine]);
+        appendTerminalOutput(promptLine);
 
         const cmd = terminalInput.trim();
 
@@ -6185,17 +6366,17 @@ export default function ModuleDetail({
                     setTerminalPath(lastLine);
                 } else {
                     // 有错误，显示错误信息
-                    setTerminalOutput(prev => [...prev, output || 'cd: 目录不存在或无权限']);
+                    appendTerminalOutput(output || 'cd: 目录不存在或无权限');
                 }
             } catch (e) {
-                setTerminalOutput(prev => [...prev, `错误: ${e}`]);
+                appendTerminalOutput(`错误: ${e}`);
             }
         } else {
             // 普通命令使用executeTerminalCommand在当前目录执行
             const output = await executeTerminalCommand(cmd, terminalPath);
             // 始终显示输出（包括错误信息）
             if (output) {
-                setTerminalOutput(prev => [...prev, output]);
+                appendTerminalOutput(output);
             }
         }
 
@@ -8512,7 +8693,7 @@ export default function ModuleDetail({
 
         return (
             <Table
-                className={isModuleWorkbenchMode ? 'windows-module-table' : undefined}
+                className={isModuleWorkbenchMode ? moduleTableClassName : undefined}
                 dataSource={filteredData}
                 columns={visibleColumns}
                 size="small"
@@ -9087,20 +9268,51 @@ export default function ModuleDetail({
 
         // 防火墙规则 - 表格样式
         if (moduleKey === 'iptables') {
+            const firewallColors = isDarkMode
+                ? {
+                    background: 'rgba(8, 13, 18, 0.94)',
+                    border: '1px solid rgba(94, 234, 212, 0.12)',
+                    text: '#d8e8e2',
+                    chain: '#7dd3fc',
+                    accept: '#5eead4',
+                    block: '#fb7185',
+                    option: '#fbbf24',
+                }
+                : {
+                    background: '#f8fcfa',
+                    border: '1px solid rgba(20, 83, 45, 0.12)',
+                    text: '#1f3a33',
+                    chain: '#0369a1',
+                    accept: '#0f766e',
+                    block: '#be123c',
+                    option: '#a16207',
+                };
             return (
-                <div style={{ background: '#1e1e1e', padding: 16, borderRadius: 8, maxHeight: 500, overflow: 'auto' }}>
-                    <pre style={{ margin: 0, color: '#d4d4d4', fontSize: 12, fontFamily: 'Consolas, monospace' }}>
+                <div className="linux-command-output" style={{ background: firewallColors.background, border: firewallColors.border }}>
+                    <pre style={{ margin: 0, color: firewallColors.text, fontSize: 12, fontFamily: 'Consolas, monospace' }}>
                         {listData.map((line, i) => {
                             // 高亮规则
-                            let color = '#d4d4d4';
-                            if (line.includes('Chain')) color = '#569cd6';
-                            else if (line.includes('ACCEPT')) color = '#4ec9b0';
-                            else if (line.includes('DROP') || line.includes('REJECT')) color = '#f14c4c';
-                            else if (line.includes('--')) color = '#ce9178';
+                            let color = firewallColors.text;
+                            if (line.includes('Chain')) color = firewallColors.chain;
+                            else if (line.includes('ACCEPT')) color = firewallColors.accept;
+                            else if (line.includes('DROP') || line.includes('REJECT')) color = firewallColors.block;
+                            else if (line.includes('--')) color = firewallColors.option;
 
                             return <div key={i} style={{ color }}>{line || ' '}</div>;
                         })}
                     </pre>
+                </div>
+            );
+        }
+
+        if (isLinuxRemoteMode) {
+            return (
+                <div className="linux-list-surface">
+                    {listData.map((item, index) => (
+                        <div className="linux-list-row" key={`${index}-${item}`}>
+                            <Text>{item}</Text>
+                        </div>
+                    ))}
                 </div>
             );
         }
@@ -9121,6 +9333,33 @@ export default function ModuleDetail({
     };
 
     const renderTerminal = () => {
+        const terminalTheme = isDarkMode
+            ? {
+                className: 'linux-remote-terminal linux-remote-terminal-dark',
+                background: 'rgba(2, 6, 23, 0.92)',
+                border: '1px solid rgba(148, 163, 184, 0.20)',
+                shadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
+                text: '#dbeafe',
+                muted: '#94a3b8',
+                accent: '#34d399',
+                user: '#fb7185',
+                path: '#fde68a',
+                command: '#86efac',
+                caret: '#e2e8f0',
+            }
+            : {
+                className: 'linux-remote-terminal linux-remote-terminal-light',
+                background: 'rgba(248, 250, 252, 0.92)',
+                border: '1px solid rgba(15, 23, 42, 0.12)',
+                shadow: 'inset 0 1px 0 rgba(255,255,255,0.75)',
+                text: '#1e293b',
+                muted: '#64748b',
+                accent: '#0f766e',
+                user: '#b91c1c',
+                path: '#92400e',
+                command: '#0f766e',
+                caret: '#0f172a',
+            };
         // 点击终端区域时聚焦输入框
         const handleTerminalClick = () => {
             inputRef.current?.focus();
@@ -9139,16 +9378,16 @@ export default function ModuleDetail({
                 return (
                     <div key={i} style={{ marginBottom: 4 }}>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
-                            <span style={{ color: '#4ec9b0' }}>┌──</span>
-                            <span style={{ color: '#f14c4c' }}>({userHost})</span>
-                            <span style={{ color: '#4ec9b0' }}>-[</span>
-                            <span style={{ color: '#dcdcaa' }}>{path}</span>
-                            <span style={{ color: '#4ec9b0' }}>]</span>
+                            <span style={{ color: terminalTheme.accent }}>┌──</span>
+                            <span style={{ color: terminalTheme.user }}>({userHost})</span>
+                            <span style={{ color: terminalTheme.accent }}>-[</span>
+                            <span style={{ color: terminalTheme.path }}>{path}</span>
+                            <span style={{ color: terminalTheme.accent }}>]</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
-                            <span style={{ color: '#4ec9b0' }}>└──</span>
-                            <span style={{ color: '#f14c4c' }}>{symbol}&nbsp;</span>
-                            <span style={{ color: '#4ec9b0' }}>{command}</span>
+                            <span style={{ color: terminalTheme.accent }}>└──</span>
+                            <span style={{ color: terminalTheme.user }}>{symbol}&nbsp;</span>
+                            <span style={{ color: terminalTheme.command }}>{command}</span>
                         </div>
                     </div>
                 );
@@ -9159,21 +9398,24 @@ export default function ModuleDetail({
                 const cmd = line.substring(2);
                 return (
                     <div key={i} style={{ marginBottom: 2 }}>
-                        <span style={{ color: '#f14c4c' }}>{prompt}</span>
-                        <span style={{ color: '#4ec9b0' }}> {cmd}</span>
+                        <span style={{ color: terminalTheme.user }}>{prompt}</span>
+                        <span style={{ color: terminalTheme.command }}> {cmd}</span>
                     </div>
                 );
             }
-            return <div key={i} style={{ color: '#d4d4d4', marginBottom: 2, whiteSpace: 'pre-wrap' }}>{line}</div>;
+            return <div key={i} style={{ color: terminalTheme.text, marginBottom: 2, whiteSpace: 'pre-wrap' }}>{line}</div>;
         };
 
         return (
             <div
+                className={terminalTheme.className}
                 ref={terminalRef}
                 onClick={handleTerminalClick}
                 style={{
                     height: 'calc(100vh - 150px)',
-                    background: '#0c0c0c',
+                    background: terminalTheme.background,
+                    border: terminalTheme.border,
+                    boxShadow: terminalTheme.shadow,
                     borderRadius: 8,
                     padding: 16,
                     overflow: 'auto',
@@ -9184,21 +9426,37 @@ export default function ModuleDetail({
                 }}
             >
                 {/* 历史输出 */}
-                {terminalOutput.map(renderLine)}
+                {terminalSession ? (
+                    <pre
+                        style={{
+                            margin: 0,
+                            color: terminalTheme.text,
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                            fontFamily: 'Consolas, monospace',
+                            fontSize: 14,
+                            lineHeight: 1.45,
+                        }}
+                    >
+                        {terminalOutput.length > 0 ? terminalOutput.join('') : '正在建立交互式终端...\n'}
+                    </pre>
+                ) : (
+                    terminalOutput.map(renderLine)
+                )}
 
                 {/* 当前输入行 - 使用完整提示符格式 */}
-                {!executing && (
+                {!executing && !terminalSession && (
                     <div>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
-                            <span style={{ color: '#4ec9b0' }}>┌──</span>
-                            <span style={{ color: '#f14c4c' }}>({terminalUser}@{terminalHost})</span>
-                            <span style={{ color: '#4ec9b0' }}>-[</span>
-                            <span style={{ color: '#dcdcaa' }}>{terminalPath}</span>
-                            <span style={{ color: '#4ec9b0' }}>]</span>
+                            <span style={{ color: terminalTheme.accent }}>┌──</span>
+                            <span style={{ color: terminalTheme.user }}>({terminalUser}@{terminalHost})</span>
+                            <span style={{ color: terminalTheme.accent }}>-[</span>
+                            <span style={{ color: terminalTheme.path }}>{terminalPath}</span>
+                            <span style={{ color: terminalTheme.accent }}>]</span>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
-                            <span style={{ color: '#4ec9b0' }}>└──</span>
-                            <span style={{ color: '#f14c4c' }}>{terminalUser === 'root' ? '#' : '$'}</span>
+                            <span style={{ color: terminalTheme.accent }}>└──</span>
+                            <span style={{ color: terminalTheme.user }}>{terminalUser === 'root' ? '#' : '$'}</span>
                             <input
                                 ref={inputRef}
                                 value={terminalInput}
@@ -9214,11 +9472,11 @@ export default function ModuleDetail({
                                     background: 'transparent',
                                     border: 'none',
                                     outline: 'none',
-                                    color: '#4ec9b0',
+                                    color: terminalTheme.command,
                                     fontFamily: 'Consolas, monospace',
                                     fontSize: 14,
                                     marginLeft: 4,
-                                    caretColor: '#fff',
+                                    caretColor: terminalTheme.caret,
                                 }}
                             />
                         </div>
@@ -9227,7 +9485,33 @@ export default function ModuleDetail({
 
                 {/* 执行中状态 */}
                 {executing && (
-                    <div style={{ color: '#888' }}>执行中...</div>
+                    <div style={{ color: terminalTheme.muted }}>执行中...</div>
+                )}
+                {!executing && terminalSession && (
+                    <div style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
+                        <span style={{ color: terminalTheme.accent }}>$</span>
+                        <input
+                            ref={inputRef}
+                            value={terminalInput}
+                            onChange={(e) => setTerminalInput(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    handleTerminalCommand();
+                                }
+                            }}
+                            style={{
+                                flex: 1,
+                                background: 'transparent',
+                                border: 'none',
+                                outline: 'none',
+                                color: terminalTheme.command,
+                                fontFamily: 'Consolas, monospace',
+                                fontSize: 14,
+                                marginLeft: 6,
+                                caretColor: terminalTheme.caret,
+                            }}
+                        />
+                    </div>
                 )}
             </div>
         );
@@ -11065,6 +11349,34 @@ export default function ModuleDetail({
                 : 'info';
         const evidenceText = compactEvidence(collectionDiagnostic.evidence.join('\n\n'), 1600);
 
+        if (isLinuxRemoteMode) {
+            return (
+                <div className={`${emptyStateClassName} linux-diagnostic-state`}>
+                    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+                        <Text className="linux-diagnostic-kicker" type="secondary">
+                            {DIAGNOSTIC_TITLE}
+                        </Text>
+                        <Space size={8} wrap>
+                            <Text strong>当前 Linux 模块没有可展示记录</Text>
+                            <Tag color={tagColor}>{collectionDiagnostic.reason}</Tag>
+                        </Space>
+                        <Alert
+                            type={alertType as any}
+                            showIcon
+                            title={collectionDiagnostic.suggestion}
+                            style={{ borderRadius: 6 }}
+                        />
+                        {evidenceText && (
+                            <details className="linux-diagnostic-evidence">
+                                <summary>{DIAGNOSTIC_EVIDENCE_SUMMARY}</summary>
+                                <pre>{evidenceText}</pre>
+                            </details>
+                        )}
+                    </Space>
+                </div>
+            );
+        }
+
         return (
             <Card
                 className={cardClass}
@@ -11173,10 +11485,10 @@ export default function ModuleDetail({
         };
 
         return (
-            <div className="windows-data-toolbar">
-                <div className="windows-data-toolbar-main">
+            <div className={dataToolbarClassName}>
+                <div className={dataToolbarMainClassName}>
                     <Input
-                        className="windows-search-input"
+                        className={dataSearchInputClassName}
                         prefix={<SearchOutlined />}
                         placeholder="搜索关键字..."
                         allowClear
@@ -11197,7 +11509,7 @@ export default function ModuleDetail({
                             ]}
                         />
                     )}
-                    <Text className="windows-result-count" type="secondary">
+                    <Text className={dataResultCountClassName} type="secondary">
                         {collectionArtifact
                             ? `预览 ${filteredCount} 条 / 全量 ${collectionArtifact.totalCount} 条`
                             : windowsLogPageInfo
@@ -11207,7 +11519,7 @@ export default function ModuleDetail({
                             : `共 ${filteredCount} 条结果`}
                     </Text>
                 </div>
-                <div className="windows-data-toolbar-actions">
+                <div className={dataToolbarActionsClassName}>
                     {supportsFullWindowsLogExport && (
                         <Button
                             icon={<FileSearchOutlined />}
@@ -11311,24 +11623,19 @@ export default function ModuleDetail({
     };
 
     const renderWindowsDataSurface = () => (
-        <div className="windows-data-workbench" style={{
-            border: `1px solid ${isDarkMode ? '#30363d' : '#d9e2ec'}`,
-            borderRadius: 8,
-            background: isDarkMode ? '#161b22' : '#ffffff',
-            overflow: 'hidden',
-        }}>
+        <div className={dataWorkbenchClassName}>
             {renderWindowsToolbar()}
             {renderFullCollectionProgress()}
             {filteredCount > 0 ? (
-                <div className="windows-data-table-frame">
+                <div className={dataTableFrameClassName}>
                     {renderTable()}
                 </div>
             ) : (
-                <div className="windows-filter-empty">
+                <div className={dataFilterEmptyClassName}>
                     <Empty
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                         description={
-                            <div className="windows-filter-empty-copy">
+                            <div className={dataFilterEmptyCopyClassName}>
                                 <Text>没有匹配的结果</Text>
                                 <Text type="secondary" style={{ fontSize: 12 }}>
                                     调整搜索关键字，或清除搜索后查看全部采集记录。
@@ -11345,15 +11652,7 @@ export default function ModuleDetail({
     );
 
     const renderWindowsEmptyState = () => (
-        <div className="windows-empty-state" style={{
-            minHeight: 220,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            border: `1px solid ${isDarkMode ? '#30363d' : '#d9e2ec'}`,
-            borderRadius: 8,
-            background: isDarkMode ? '#161b22' : '#ffffff',
-        }}>
+        <div className={emptyStateClassName}>
             <Empty
                 description={
                     <Space orientation="vertical" size={4}>
@@ -11379,6 +11678,12 @@ export default function ModuleDetail({
         isModuleWorkbenchMode
             ? renderWindowsEmptyState()
             : <Card className={cardClass}><Text type="secondary">暂无数据</Text></Card>
+    );
+
+    const renderListSurface = () => (
+        isModuleWorkbenchMode
+            ? <div className={dataWorkbenchClassName}>{renderList()}</div>
+            : <Card className={cardClass}>{renderList()}</Card>
     );
 
     const renderWindowsPanelDetection = () => {
@@ -11462,6 +11767,7 @@ export default function ModuleDetail({
             </>
         );
         if (isModuleWorkbenchMode && tableData.length > 0) return renderWindowsDataSurface();
+        if (isModuleWorkbenchMode && listData.length > 0) return renderListSurface();
         if (isModuleWorkbenchMode) return renderWindowsEmptyState();
         if (tableData.length > 0) return <Card className={cardClass}>{renderTable()}</Card>;
         if (listData.length > 0) return <Card className={cardClass}>{renderList()}</Card>;

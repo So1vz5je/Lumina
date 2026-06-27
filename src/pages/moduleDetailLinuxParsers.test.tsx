@@ -6,12 +6,17 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import ModuleDetail from './ModuleDetail';
 
-const { invokeMock } = vi.hoisted(() => ({
+const { invokeMock, listenMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
+  listenMock: vi.fn(async () => vi.fn()),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
+}));
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: listenMock,
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -58,13 +63,15 @@ beforeAll(() => {
 beforeEach(() => {
   (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
   invokeMock.mockReset();
+  listenMock.mockReset();
+  listenMock.mockImplementation(async () => vi.fn());
 });
 
 afterEach(() => {
   delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 });
 
-function renderRemoteModule(moduleKey: string, stdout: string) {
+function renderRemoteModule(moduleKey: string, stdout: string, options: { isDarkMode?: boolean } = {}) {
   invokeMock.mockImplementation(async (command: string) => {
     if (command === 'ssh_execute') {
       return {
@@ -84,7 +91,7 @@ function renderRemoteModule(moduleKey: string, stdout: string) {
       osType="Linux"
       privilegeMode="none"
       sudoPassword=""
-      isDarkMode={false}
+      isDarkMode={options.isDarkMode ?? false}
       glassEnabled={false}
       wallpaper=""
     />,
@@ -92,11 +99,30 @@ function renderRemoteModule(moduleKey: string, stdout: string) {
 }
 
 function renderRemoteSystemInfo(commandOutputs: Record<string, string>, options: { isDarkMode?: boolean } = {}) {
+  const sectionOutput = [
+    ['HOSTNAME', commandOutputs.hostname],
+    ['OS_RELEASE', commandOutputs['cat /etc/os-release 2>/dev/null']],
+    ['UPTIME', commandOutputs.uptime],
+    ['MEMORY', commandOutputs['free -h | grep Mem']],
+    ['DISKS', commandOutputs['df -h | grep -E "^/dev"']],
+    ['CPU_CORES', commandOutputs.nproc],
+    ['IP_ADDRESS', commandOutputs['hostname -I 2>/dev/null | awk \'{print $1}\' || ip addr show | grep "inet " | head -1 | awk \'{print $2}\'']],
+    ['KERNEL', commandOutputs['uname -r']],
+    ['ARCH', commandOutputs['uname -m']],
+    ['CPU_MODEL', commandOutputs['cat /proc/cpuinfo | grep "model name" | head -1 | cut -d: -f2']],
+    ['ISSUE', commandOutputs['cat /etc/issue 2>/dev/null | head -1']],
+    ['REDHAT_RELEASE', commandOutputs['cat /etc/redhat-release 2>/dev/null || cat /etc/centos-release 2>/dev/null || cat /etc/system-release 2>/dev/null']],
+  ]
+    .map(([name, value]) => `__LUMINA_${name}__\n${value ?? ''}`)
+    .join('\n');
+
   invokeMock.mockImplementation(async (command: string, args?: { command?: string }) => {
     if (command === 'ssh_execute') {
       return {
         success: true,
-        stdout: commandOutputs[args?.command || ''] ?? '',
+        stdout: args?.command?.includes('__LUMINA_HOSTNAME__')
+          ? sectionOutput
+          : commandOutputs[args?.command || ''] ?? '',
         stderr: '',
       };
     }
@@ -154,6 +180,7 @@ describe('ModuleDetail Linux remote module rendering', () => {
       expect(screen.getByText('内存使用')).toBeInTheDocument();
       expect(screen.getByText('磁盘数量')).toBeInTheDocument();
     });
+    expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
   it('marks Linux host overview as collected when remote system info is loaded', async () => {
@@ -262,8 +289,10 @@ describe('ModuleDetail Linux remote module rendering', () => {
     });
 
     expect(container.querySelector('.linux-module-shell')).toBeInTheDocument();
-    expect(container.querySelector('.windows-data-workbench')).toBeInTheDocument();
-    expect(container.querySelector('.windows-module-table')).toBeInTheDocument();
+    expect(container.querySelector('.linux-data-workbench')).toBeInTheDocument();
+    expect(container.querySelector('.linux-module-table')).toBeInTheDocument();
+    expect(container.querySelector('.windows-data-workbench')).not.toBeInTheDocument();
+    expect(container.querySelector('.windows-module-table')).not.toBeInTheDocument();
   });
 
   it('shows a Linux-specific workbench header and toolbar for collected table modules', async () => {
@@ -281,9 +310,21 @@ describe('ModuleDetail Linux remote module rendering', () => {
 
     expect(container.querySelector('.linux-module-header')).toBeInTheDocument();
     expect(container.querySelector('.linux-module-header')?.textContent).not.toContain('1 条结果');
-    expect(container.querySelector('.windows-data-toolbar')).toBeInTheDocument();
-    expect(container.querySelector('.windows-data-toolbar')?.textContent).toContain('共 1 条');
+    expect(container.querySelector('.linux-data-toolbar')).toBeInTheDocument();
+    expect(container.querySelector('.linux-data-toolbar')?.textContent).toContain('共 1 条');
     expect(screen.getByPlaceholderText('搜索关键字...')).toBeInTheDocument();
+  });
+
+  it('keeps empty Linux modules inside the themed workbench surface in dark mode', async () => {
+    const { container } = renderRemoteModule('hosts_file', '', { isDarkMode: true });
+
+    await waitFor(() => {
+      expect(screen.getByText('当前 Linux 模块没有可展示记录')).toBeInTheDocument();
+    });
+
+    expect(container.querySelector('.linux-empty-state')).toBeInTheDocument();
+    expect(container.querySelector('.linux-module-body')).toBeInTheDocument();
+    expect(container.querySelector('.ant-card')).not.toBeInTheDocument();
   });
 
   it('hides success-state collection and tool tags for collected Linux modules', async () => {
@@ -468,6 +509,79 @@ describe('ModuleDetail Linux remote module rendering', () => {
       expect(screen.getByText('sshd')).toBeInTheDocument();
       expect(screen.getByText('dhclient')).toBeInTheDocument();
     });
+  });
+
+  it('opens the Linux remote terminal as an interactive SSH session', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'remote_open_active_terminal_session') {
+        return {
+          id: 'term-1',
+          connectionId: 'conn-1',
+          title: 'analysis-shell',
+          cwd: '~',
+        };
+      }
+      if (command === 'remote_close_terminal_session') return null;
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    render(
+      <ModuleDetail
+        moduleKey="terminal"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('remote_open_active_terminal_session', {
+        title: 'analysis-shell',
+        cols: 120,
+        rows: 34,
+      });
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('ssh_execute', expect.anything());
+  });
+
+  it('matches the Linux remote terminal surface to the active theme', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'remote_open_active_terminal_session') {
+        return {
+          id: 'term-1',
+          connectionId: 'conn-1',
+          title: 'analysis-shell',
+          cwd: '~',
+        };
+      }
+      if (command === 'remote_close_terminal_session') return null;
+
+      throw new Error(`Unexpected command: ${command}`);
+    });
+
+    const { container } = render(
+      <ModuleDetail
+        moduleKey="terminal"
+        mode="remote"
+        osType="Linux"
+        privilegeMode="none"
+        sudoPassword=""
+        isDarkMode={false}
+        glassEnabled={false}
+        wallpaper=""
+      />,
+    );
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('remote_open_active_terminal_session', expect.anything()));
+    const terminal = container.querySelector('.linux-remote-terminal');
+    expect(terminal).toBeInTheDocument();
+    expect(terminal).toHaveClass('linux-remote-terminal-light');
+    expect(terminal).not.toHaveStyle({ background: '#0c0c0c' });
   });
 
   it('shows SSH key filenames, types, owners, and full paths consistently', async () => {

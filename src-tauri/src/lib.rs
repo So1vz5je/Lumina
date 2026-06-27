@@ -53,8 +53,8 @@ pub struct SystemInfo {
 }
 
 #[derive(Default)]
-struct RemoteAppState {
-    connection_manager: Mutex<ConnectionManager>,
+pub(crate) struct RemoteAppState {
+    pub(crate) connection_manager: Mutex<ConnectionManager>,
     terminal_manager: Mutex<TerminalManager>,
     legacy_connect_lock: Mutex<()>,
 }
@@ -310,6 +310,96 @@ fn remote_open_terminal_session(
         connection_id,
         title,
     )
+}
+
+#[tauri::command]
+fn remote_open_active_terminal_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, RemoteAppState>,
+    title: String,
+    cols: Option<u32>,
+    rows: Option<u32>,
+) -> Result<RemoteTerminalSession, String> {
+    let (connection_id, client) = {
+        let connection_manager = state
+            .connection_manager
+            .lock()
+            .map_err(|_| "Failed to lock connection manager".to_string())?;
+
+        connection_manager
+            .active_client()
+            .ok_or_else(|| "No active SSH connection".to_string())?
+    };
+
+    let session = {
+        let connection_manager = state
+            .connection_manager
+            .lock()
+            .map_err(|_| "Failed to lock connection manager".to_string())?;
+        let mut terminal_manager = state
+            .terminal_manager
+            .lock()
+            .map_err(|_| "Failed to lock terminal manager".to_string())?;
+
+        open_terminal_session_for_connection(
+            &connection_manager,
+            &mut terminal_manager,
+            connection_id.clone(),
+            title,
+        )?
+    };
+
+    let input_sender = client.spawn_interactive_shell(
+        app,
+        connection_id,
+        session.id.clone(),
+        cols.unwrap_or(120),
+        rows.unwrap_or(32),
+    );
+
+    match input_sender {
+        Ok(sender) => {
+            let mut terminal_manager = state
+                .terminal_manager
+                .lock()
+                .map_err(|_| "Failed to lock terminal manager".to_string())?;
+            terminal_manager.attach_input_sender(session.id.clone(), sender)?;
+            Ok(session)
+        }
+        Err(error) => {
+            if let Ok(mut terminal_manager) = state.terminal_manager.lock() {
+                let _ = terminal_manager.close_session(&session.id);
+            }
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+fn remote_send_terminal_input(
+    state: tauri::State<'_, RemoteAppState>,
+    session_id: String,
+    data: String,
+) -> Result<(), String> {
+    let terminal_manager = state
+        .terminal_manager
+        .lock()
+        .map_err(|_| "Failed to lock terminal manager".to_string())?;
+
+    terminal_manager.send_input(&session_id, data.into_bytes())
+}
+
+#[tauri::command]
+fn remote_close_terminal_session(
+    state: tauri::State<'_, RemoteAppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let mut terminal_manager = state
+        .terminal_manager
+        .lock()
+        .map_err(|_| "Failed to lock terminal manager".to_string())?;
+
+    terminal_manager.close_session(&session_id)
 }
 
 #[tauri::command]
@@ -837,6 +927,9 @@ pub fn run() {
             get_system_info,
             run_scan,
             remote_connect,
+            remote_open_active_terminal_session,
+            remote_send_terminal_input,
+            remote_close_terminal_session,
             remote_open_terminal_session,
             remote_run_terminal_command,
             ssh_connect,

@@ -1,3 +1,4 @@
+use crate::ssh::{CommandResult, SshClient};
 use crate::workspace::{self, WorkspaceConfigView};
 use chrono::Local;
 use encoding_rs::{GBK, UTF_16BE, UTF_16LE};
@@ -9,7 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -27,6 +28,12 @@ static AI_ADMIN_APPROVED_SESSIONS: Lazy<Mutex<BTreeSet<String>>> =
 struct AdminApprovalHandle {
     session_id: String,
     sender: mpsc::Sender<bool>,
+}
+
+#[derive(Clone)]
+struct AiRemoteCommandTarget {
+    connection_id: String,
+    client: Arc<SshClient>,
 }
 
 fn default_max_tool_calls() -> u32 {
@@ -358,7 +365,11 @@ pub fn ai_test_config(request: AiConfigRequest) -> Result<AiTestResult, String> 
 }
 
 #[tauri::command]
-pub fn ai_send_message(app: AppHandle, request: AiSendMessageRequest) -> Result<(), String> {
+pub fn ai_send_message(
+    app: AppHandle,
+    remote_state: tauri::State<'_, crate::RemoteAppState>,
+    request: AiSendMessageRequest,
+) -> Result<(), String> {
     clear_ai_session_cancelled(&request.session_id);
     let config = load_ai_config();
     let workspace = match workspace::current_workspace_paths() {
@@ -385,9 +396,24 @@ pub fn ai_send_message(app: AppHandle, request: AiSendMessageRequest) -> Result<
         return Ok(());
     }
 
+    let remote_command_target = if should_use_remote_ssh_tools(&request.context) {
+        match remote_state.connection_manager.lock() {
+            Ok(manager) => {
+                manager
+                    .active_client()
+                    .map(|(connection_id, client)| AiRemoteCommandTarget {
+                        connection_id,
+                        client,
+                    })
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     let session_id = request.session_id.clone();
     std::thread::spawn(move || {
-        if let Err(err) = run_ai_session(&app, config, request, workspace) {
+        if let Err(err) = run_ai_session(&app, config, request, workspace, remote_command_target) {
             if err == AI_CANCELLED_ERROR {
                 let _ = emit_ai_event(&app, &session_id, "cancelled", "", None);
             } else {
@@ -444,6 +470,7 @@ fn run_ai_session(
     config: AiConfig,
     request: AiSendMessageRequest,
     workspace: WorkspaceConfigView,
+    remote_command_target: Option<AiRemoteCommandTarget>,
 ) -> Result<(), String> {
     ensure_ai_session_active(&request.session_id)?;
     let _ = log_ai_audit_event(
@@ -464,7 +491,13 @@ fn run_ai_session(
         None,
     )?;
 
-    match stream_openai_compatible_response(app, &config, &request, &workspace) {
+    match stream_openai_compatible_response(
+        app,
+        &config,
+        &request,
+        &workspace,
+        remote_command_target.as_ref(),
+    ) {
         Ok(()) => {}
         Err(err) if err == AI_CANCELLED_ERROR => {
             emit_ai_event(app, &request.session_id, "cancelled", "", None)?;
@@ -543,7 +576,53 @@ fn chat_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
+fn should_use_remote_ssh_tools(context: &AiWorkspaceContext) -> bool {
+    let mode = context.mode.to_ascii_lowercase();
+    let os_type = context.os_type.to_ascii_lowercase();
+    os_type == "linux" && (mode.contains("remote") || context.mode.contains("远程"))
+}
+
+#[cfg(test)]
 fn build_ai_tool_definitions() -> Value {
+    build_ai_tool_definitions_for_context(&AiWorkspaceContext {
+        mode: "local".to_string(),
+        os_type: "windows".to_string(),
+        current_module: "ai_analysis".to_string(),
+        scan_result_count: 0,
+        scan_result_summaries: vec![],
+    })
+}
+
+fn build_ai_tool_definitions_for_context(context: &AiWorkspaceContext) -> Value {
+    if should_use_remote_ssh_tools(context) {
+        return json!([
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "description": "Run a read-only incident response command on the active SSH connection to the current Linux host. Use this for Linux evidence collection and verification. Avoid interactive commands, package installs, long-running watchers, sudo, pkexec, and destructive changes.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "Linux shell command to run on the active SSH host, for example: journalctl -n 50 --no-pager"
+                            },
+                            "timeoutSeconds": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 120,
+                                "description": "Remote command timeout. Defaults to 30 seconds."
+                            }
+                        },
+                        "required": ["command"],
+                        "additionalProperties": false
+                    }
+                }
+            }
+        ]);
+    }
+
     json!([
         {
             "type": "function",
@@ -588,6 +667,7 @@ fn build_chat_payload_from_messages(
     config: &AiConfig,
     messages: Vec<Value>,
     include_tools: bool,
+    context: &AiWorkspaceContext,
 ) -> Value {
     let mut payload = json!({
         "model": config.model,
@@ -597,7 +677,7 @@ fn build_chat_payload_from_messages(
         "stream": true
     });
     if include_tools {
-        payload["tools"] = build_ai_tool_definitions();
+        payload["tools"] = build_ai_tool_definitions_for_context(context);
         payload["tool_choice"] = json!("auto");
     }
     payload
@@ -615,7 +695,15 @@ fn build_chat_payload(config: &AiConfig, request: &AiSendMessageRequest) -> Valu
         })
     }));
 
-    build_chat_payload_from_messages(config, messages, config.tools_enabled)
+    build_chat_payload_from_messages(config, messages, config.tools_enabled, &request.context)
+}
+
+fn build_agent_system_prompt(context: &AiWorkspaceContext) -> &'static str {
+    if should_use_remote_ssh_tools(context) {
+        return "你是 Lumina 应急响应分析助手。基于用户问题、工作区上下文和工具结果给出可执行、可验证的安全分析结论。输出中文，优先列出风险、证据、下一步操作。需要主机信息时使用唯一工具 run_command，它会在当前 SSH 连接的 Linux 主机上执行命令。优先使用只读、非交互命令；常用证据来源包括 journalctl、last、lastb、/var/log/auth.log、/var/log/secure、ss、ps、systemctl、find。不要把本地工作区当成远程文件系统；大范围采集先限定路径、分页或输出摘要。When scanResultCount=0, clearly state that there are no loaded scan results before trying extra collection commands. Do not keep retrying the same failing command style; after two similar failures, explain the failure and switch to a smaller verification step or ask for missing context. 权限不足时说明需要用户在远程主机侧授权或提供具备权限的 SSH 账号，不要直接使用 sudo、pkexec 或交互式提权。";
+    }
+
+    "你是 Lumina 应急响应分析助手。基于用户问题、工作区上下文和工具结果给出可执行、可验证的安全分析结论。输出中文，优先列出风险、证据、下一步操作。需要本机信息时使用唯一工具 run_command 执行本机命令或 python 命令。默认工作目录是当前机器工作区，不要从项目目录或全盘开始无边界递归扫描；需要大范围采集时先列范围、分页或把结果保存到工作区。Windows 目录和文件检查优先使用 PowerShell Get-ChildItem -LiteralPath，并优先验证具体路径是否存在。When scanResultCount=0, clearly state that there are no loaded scan results before trying extra collection commands. Do not keep retrying the same failing command style; after two similar failures, explain the failure and switch to a smaller verification step or ask for missing context. 需要管理员权限时，在 run_command 参数中设置 runAsAdmin=true 并说明 reason，等待用户批准；不要直接包装 Start-Process -Verb RunAs、runas、sudo、gsudo。"
 }
 
 fn build_agent_chat_messages(
@@ -625,7 +713,7 @@ fn build_agent_chat_messages(
     let mut messages = vec![
         json!({
             "role": "system",
-            "content": "你是 Lumina 应急响应分析助手。基于用户问题、工作区上下文和工具结果给出可执行、可验证的安全分析结论。输出中文，优先列出风险、证据、下一步操作。需要本机信息时使用唯一工具 run_command 执行本机命令或 python 命令。默认工作目录是当前机器工作区，不要从项目目录或全盘开始无边界递归扫描；需要大范围采集时先列范围、分页或把结果保存到工作区。Windows 目录和文件检查优先使用 PowerShell Get-ChildItem -LiteralPath，并优先验证具体路径是否存在。When scanResultCount=0, clearly state that there are no loaded scan results before trying extra collection commands. Do not keep retrying the same failing command style; after two similar failures, explain the failure and switch to a smaller verification step or ask for missing context. 需要管理员权限时，在 run_command 参数中设置 runAsAdmin=true 并说明 reason，等待用户批准；不要直接包装 Start-Process -Verb RunAs、runas、sudo、gsudo。"
+            "content": build_agent_system_prompt(&request.context)
         }),
         json!({
             "role": "system",
@@ -727,6 +815,7 @@ fn run_openai_compatible_agent_loop(
     config: &AiConfig,
     request: &AiSendMessageRequest,
     workspace: &WorkspaceConfigView,
+    remote_command_target: Option<&AiRemoteCommandTarget>,
 ) -> Result<(), String> {
     let mut messages = build_agent_chat_messages(request, workspace);
     let max_tool_calls = if config.tools_enabled {
@@ -796,7 +885,8 @@ fn run_openai_compatible_agent_loop(
                     "arguments": call.arguments,
                 }),
             );
-            let tool_result = execute_ai_tool_for_request(app, request, &call, workspace);
+            let tool_result =
+                execute_ai_tool_for_request(app, request, &call, workspace, remote_command_target);
             ensure_ai_session_active(&request.session_id)?;
             emit_ai_event(
                 app,
@@ -843,6 +933,7 @@ fn stream_chat_completion_round(
             config,
             messages,
             config.tools_enabled,
+            &request.context,
         ))
         .send()
         .map_err(|err| format!("AI request failed: {}", err))?;
@@ -1018,9 +1109,13 @@ fn execute_ai_tool_for_request(
     request: &AiSendMessageRequest,
     call: &AiToolCall,
     workspace: &WorkspaceConfigView,
+    remote_command_target: Option<&AiRemoteCommandTarget>,
 ) -> String {
     let args = parse_tool_arguments(&call.arguments);
     match call.name.as_str() {
+        "run_command" if should_use_remote_ssh_tools(&request.context) => {
+            execute_remote_ssh_command_for_request(request, &args, remote_command_target)
+        }
         "run_command" => execute_shell_command_for_request(app, request, &args, workspace),
         _ => format!("Unsupported tool: {}", call.name),
     }
@@ -1071,6 +1166,103 @@ fn execute_shell_command_for_request(
         return execute_admin_shell_command_with_approval(app, request, args, workspace);
     }
     execute_shell_command_with_workspace(args, Some(&request.session_id), workspace)
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn build_remote_linux_command(command_line: &str, timeout_seconds: u64) -> String {
+    format!(
+        "timeout {}s sh -lc {}",
+        timeout_seconds,
+        shell_single_quote(command_line)
+    )
+}
+
+fn format_remote_command_result(
+    connection_id: &str,
+    command_line: &str,
+    timeout_seconds: u64,
+    result: &CommandResult,
+) -> String {
+    let timed_out = result.exit_code == 124;
+    truncate_tool_output(
+        format!(
+            "target=ssh:{}\ncommand={}\ntimeoutSeconds={}\ntimedOut={}\nexitCode={}\nstdout:\n{}\nstderr:\n{}",
+            connection_id,
+            command_line,
+            timeout_seconds,
+            timed_out,
+            result.exit_code,
+            result.stdout,
+            result.stderr,
+        ),
+        24_000,
+    )
+}
+
+fn execute_remote_ssh_command_for_request(
+    request: &AiSendMessageRequest,
+    args: &Value,
+    remote_command_target: Option<&AiRemoteCommandTarget>,
+) -> String {
+    let Some(command_line) = tool_arg_string(args, "command") else {
+        return "Missing required argument: command".to_string();
+    };
+    let timeout_seconds = tool_arg_u64(args, "timeoutSeconds", 30, 1, 120);
+
+    if looks_like_elevation_request(&command_line) {
+        return truncate_tool_output(
+            format!(
+                "target=ssh\ncommand={}\ntimeoutSeconds={}\ntimedOut=false\nexitCode=-1\nstdout:\n\nstderr:\nRemote Linux AI commands do not run interactive elevation. Use a privileged SSH account or ask the user to grant access on the remote host.",
+                command_line,
+                timeout_seconds,
+            ),
+            24_000,
+        );
+    }
+    if is_ai_session_cancelled(&request.session_id) {
+        return truncate_tool_output(
+            format!(
+                "target=ssh\ncommand={}\ntimeoutSeconds={}\ntimedOut=false\ncancelled=true\nexitCode=-1\nstdout:\n\nstderr:\nCommand cancelled before start",
+                command_line,
+                timeout_seconds,
+            ),
+            24_000,
+        );
+    }
+
+    let Some(target) = remote_command_target else {
+        return truncate_tool_output(
+            format!(
+                "target=ssh\ncommand={}\ntimeoutSeconds={}\ntimedOut=false\nexitCode=-1\nstdout:\n\nstderr:\nNo active SSH connection. Connect to a Linux host before using AI analysis tools.",
+                command_line,
+                timeout_seconds,
+            ),
+            24_000,
+        );
+    };
+
+    let remote_command = build_remote_linux_command(&command_line, timeout_seconds);
+    match target.client.execute(&remote_command) {
+        Ok(result) => format_remote_command_result(
+            &target.connection_id,
+            &command_line,
+            timeout_seconds,
+            &result,
+        ),
+        Err(err) => truncate_tool_output(
+            format!(
+                "target=ssh:{}\ncommand={}\ntimeoutSeconds={}\ntimedOut=false\nexitCode=-1\nstdout:\n\nstderr:\n{}",
+                target.connection_id,
+                command_line,
+                timeout_seconds,
+                err,
+            ),
+            24_000,
+        ),
+    }
 }
 
 fn command_working_directory(args: &Value, workspace: &WorkspaceConfigView) -> String {
@@ -1795,11 +1987,18 @@ fn stream_openai_compatible_response(
     config: &AiConfig,
     request: &AiSendMessageRequest,
     workspace: &WorkspaceConfigView,
+    remote_command_target: Option<&AiRemoteCommandTarget>,
 ) -> Result<(), String> {
     ensure_ai_session_active(&request.session_id)?;
     let use_agent_loop = true;
     if use_agent_loop {
-        return run_openai_compatible_agent_loop(app, config, request, workspace);
+        return run_openai_compatible_agent_loop(
+            app,
+            config,
+            request,
+            workspace,
+            remote_command_target,
+        );
     }
 
     let client = reqwest::blocking::Client::builder()
@@ -2102,6 +2301,23 @@ mod tests {
         }
     }
 
+    fn sample_linux_remote_ai_request() -> AiSendMessageRequest {
+        AiSendMessageRequest {
+            session_id: "session-linux-1".to_string(),
+            messages: vec![AiChatMessage {
+                role: "user".to_string(),
+                content: "检查 Linux 主机最近登录失败".to_string(),
+            }],
+            context: AiWorkspaceContext {
+                mode: "远程分析".to_string(),
+                os_type: "Linux".to_string(),
+                current_module: "ai_analysis".to_string(),
+                scan_result_count: 0,
+                scan_result_summaries: vec![],
+            },
+        }
+    }
+
     #[test]
     fn chat_payload_includes_agent_tools_when_enabled() {
         let payload = build_chat_payload(
@@ -2131,6 +2347,39 @@ mod tests {
     }
 
     #[test]
+    fn linux_remote_tool_definition_keeps_single_run_command_backed_by_ssh() {
+        let tools =
+            build_ai_tool_definitions_for_context(&sample_linux_remote_ai_request().context);
+        let tools = tools.as_array().expect("tools array");
+        assert_eq!(tools.len(), 1);
+
+        let function = tools[0].get("function").expect("function");
+        assert_eq!(
+            function.get("name").and_then(Value::as_str),
+            Some("run_command")
+        );
+        let description = function
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("description");
+        assert!(
+            description.contains("active SSH connection"),
+            "{description}"
+        );
+        assert!(description.contains("Linux"), "{description}");
+        assert!(!description.contains("local shell"), "{description}");
+
+        let properties = function
+            .get("parameters")
+            .and_then(|parameters| parameters.get("properties"))
+            .expect("properties");
+        assert!(properties.get("command").is_some());
+        assert!(properties.get("timeoutSeconds").is_some());
+        assert!(properties.get("runAsAdmin").is_none());
+        assert!(properties.get("workingDirectory").is_none());
+    }
+
+    #[test]
     fn agent_prompt_guides_windows_command_usage_and_retry_handling() {
         let workspace = WorkspaceConfigView {
             root_path: "C:\\IR\\host".to_string(),
@@ -2152,6 +2401,38 @@ mod tests {
         assert!(!system_prompt.contains("Security logon failure queries"));
         assert!(!system_prompt.contains("4625, 4771, 4776"));
         assert!(system_prompt.contains("runAsAdmin=true"));
+    }
+
+    #[test]
+    fn agent_prompt_guides_linux_remote_command_usage() {
+        let workspace = WorkspaceConfigView {
+            root_path: "/tmp/lumina/local-workspace".to_string(),
+            exports_path: "/tmp/lumina/local-workspace/exports".to_string(),
+            ai_logs_path: "/tmp/lumina/local-workspace/ai_logs".to_string(),
+            collections_path: "/tmp/lumina/local-workspace/collections".to_string(),
+            temp_path: "/tmp/lumina/local-workspace/temp".to_string(),
+            admin_runs_path: "/tmp/lumina/local-workspace/admin_runs".to_string(),
+        };
+        let messages = build_agent_chat_messages(&sample_linux_remote_ai_request(), &workspace);
+        let system_prompt = messages[0]
+            .get("content")
+            .and_then(Value::as_str)
+            .expect("system prompt");
+
+        assert!(
+            system_prompt.contains("当前 SSH 连接的 Linux 主机"),
+            "{system_prompt}"
+        );
+        assert!(system_prompt.contains("journalctl"), "{system_prompt}");
+        assert!(system_prompt.contains("lastb"), "{system_prompt}");
+        assert!(
+            !system_prompt.contains("Get-ChildItem -LiteralPath"),
+            "{system_prompt}"
+        );
+        assert!(
+            !system_prompt.contains("runAsAdmin=true"),
+            "{system_prompt}"
+        );
     }
 
     #[test]
