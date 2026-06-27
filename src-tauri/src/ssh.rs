@@ -142,7 +142,6 @@ impl SshClient {
             .spawn(move || {
                 let run_result = (|| -> Result<(), String> {
                     let terminal_client = SshClient::connect(&terminal_config)?;
-                    terminal_client.session.set_blocking(false);
                     let mut channel = terminal_client
                         .session
                         .channel_session()
@@ -153,6 +152,7 @@ impl SshClient {
                     channel
                         .shell()
                         .map_err(|e| format!("启动远程 shell 失败: {}", e))?;
+                    terminal_client.session.set_blocking(false);
                     let _ = ready_tx.send(Ok(()));
 
                     let mut buffer = [0_u8; 8192];
