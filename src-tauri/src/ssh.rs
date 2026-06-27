@@ -15,6 +15,26 @@ pub struct SshConfig {
     pub auth_method: AuthMethod,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::is_transient_terminal_read_error;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn treats_nonblocking_transport_read_as_transient_terminal_read() {
+        let error = Error::new(ErrorKind::Other, "transport read");
+
+        assert!(is_transient_terminal_read_error(&error));
+    }
+
+    #[test]
+    fn treats_would_block_terminal_read_as_transient() {
+        let error = Error::new(ErrorKind::WouldBlock, "operation would block");
+
+        assert!(is_transient_terminal_read_error(&error));
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AuthMethod {
     Password(String),
@@ -42,6 +62,15 @@ pub struct CommandResult {
 pub struct SshClient {
     session: Session,
     config: SshConfig,
+}
+
+fn is_transient_terminal_read_error(error: &std::io::Error) -> bool {
+    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) {
+        return true;
+    }
+
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("transport read") || message.contains("would block")
 }
 
 impl SshClient {
@@ -172,7 +201,7 @@ impl SshClient {
                                         }),
                                     );
                                 }
-                                Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                                Err(error) if is_transient_terminal_read_error(&error) => break,
                                 Err(error) => {
                                     let _ = app.emit(
                                         "remote://terminal-error",
