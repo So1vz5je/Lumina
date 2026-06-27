@@ -1027,6 +1027,18 @@ describe('ModuleDetail Linux remote module rendering', () => {
     });
   });
 
+  it('collects BaoTa panel inventory without fixed row or log truncation', async () => {
+    renderRemoteModule('panel', '');
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('ssh_execute', expect.anything()));
+
+    const sshCommand = invokeMock.mock.calls.find(([command]) => command === 'ssh_execute')?.[1] as { command?: string };
+    expect(sshCommand?.command).toBeTruthy();
+    expect(sshCommand?.command).not.toContain('head -300');
+    expect(sshCommand?.command).not.toContain('tail -100');
+    expect(sshCommand?.command).not.toContain('LIMIT 30');
+  });
+
   it('structures auth, sudo, and web access log fields', async () => {
     renderRemoteModule(
       'auth_log',
