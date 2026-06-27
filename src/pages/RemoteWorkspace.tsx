@@ -1,13 +1,10 @@
 import {
-  CloudServerOutlined,
   DeploymentUnitOutlined,
   FolderOpenOutlined,
-  ThunderboltOutlined,
-  SwapOutlined,
 } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Card, Col, Row, Space, Tabs, Typography, message } from 'antd';
+import { Tabs, Typography, message } from 'antd';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ConnectionSidebar } from '../components/remote/ConnectionSidebar';
 import { FileManagerPane } from '../components/remote/FileManagerPane';
@@ -27,30 +24,23 @@ import type { RemoteConnectionRecord } from '../modules/remote/types';
 
 const { Paragraph, Title } = Typography;
 
-function ShellCard({
+function PanelHeading({
   title,
   icon,
-  children,
+  meta,
 }: {
   title: string;
   icon: ReactNode;
-  children: ReactNode;
+  meta?: string;
 }) {
   return (
-    <Card
-      title={
-        <Space size={8}>
-          {icon}
-          <Title level={5} style={{ margin: 0 }}>
-            {title}
-          </Title>
-        </Space>
-      }
-      style={{ height: '100%', borderRadius: 16 }}
-      styles={{ body: { height: '100%' } }}
-    >
-      {children}
-    </Card>
+    <div className="remote-workspace-panel-heading">
+      <div className="remote-workspace-panel-title">
+        {icon}
+        <span>{title}</span>
+      </div>
+      {meta ? <span className="remote-workspace-panel-meta">{meta}</span> : null}
+    </div>
   );
 }
 
@@ -244,79 +234,93 @@ export default function RemoteWorkspace() {
   };
 
   return (
-    <Space orientation="vertical" size={20} style={{ width: '100%' }}>
-      <div>
-        <Title level={3} style={{ marginBottom: 8 }}>
-          Remote Workspace
-        </Title>
-        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          A dedicated shell for shared connections, multi-session terminals, and
-          the remote tooling rebuilt from the LovelyERes product shape.
-        </Paragraph>
+    <section className="remote-workspace-shell">
+      <header className="remote-workspace-header">
+        <div>
+          <Title level={3} style={{ margin: 0 }}>
+            Remote Workspace
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 0, marginTop: 6 }}>
+            Shared SSH workspace for files, retained terminals, and transfers.
+          </Paragraph>
+        </div>
+        <div className="remote-workspace-active-host">
+          <span>{activeConnection ? activeConnection.name : 'No active host'}</span>
+          <strong>
+            {activeConnection
+              ? `${activeConnection.username}@${activeConnection.host}:${activeConnection.port}`
+              : 'Connect a saved host'}
+          </strong>
+        </div>
+      </header>
+
+      <div className="remote-workspace-grid">
+        <aside className="remote-workspace-panel remote-workspace-panel-side">
+          <ConnectionSidebar
+            activeConnectionId={activeSavedConnectionId}
+            connections={savedConnections}
+            connectLabel="Connect"
+            description="Reconnect saved hosts without leaving the workspace."
+            emptyDescription="No saved hosts loaded yet"
+            onActivate={activateSavedConnection}
+            onConnect={connectSavedConnection}
+            title="Saved Hosts"
+          />
+        </aside>
+
+        <main className="remote-workspace-panel remote-workspace-panel-main">
+          <PanelHeading
+            icon={<FolderOpenOutlined />}
+            meta={state.activeWorkspacePane}
+            title="Workspace"
+          />
+          <Tabs
+            activeKey={state.activeWorkspacePane}
+            className="remote-workspace-tabs"
+            destroyOnHidden={false}
+            items={[
+              {
+                key: 'files',
+                label: 'Files',
+                children: <FileManagerPane refreshToken={refreshToken} />,
+              },
+              {
+                key: 'terminal',
+                label: 'Terminal',
+                children: <TerminalPane />,
+              },
+              {
+                key: 'transfers',
+                label: 'Transfers',
+                children: (
+                  <TransferQueuePane
+                    onCancel={handleCancelTransfer}
+                    onRetry={handleRetryTransfer}
+                    tasks={state.transferQueue.tasks}
+                  />
+                ),
+              },
+            ]}
+            onChange={(pane) =>
+              dispatch({
+                type: 'workspace/paneActivated',
+                payload: {
+                  pane: pane as 'files' | 'terminal' | 'transfers',
+                },
+              })
+            }
+          />
+        </main>
+
+        <aside className="remote-workspace-panel remote-workspace-panel-side">
+          <PanelHeading
+            icon={<DeploymentUnitOutlined />}
+            title="Session Snapshot"
+          />
+          <SessionInspector />
+        </aside>
       </div>
-
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={7}>
-          <ShellCard title="Connections" icon={<CloudServerOutlined />}>
-            <ConnectionSidebar
-              activeConnectionId={activeSavedConnectionId}
-              connections={savedConnections}
-              connectLabel="Connect"
-              description="Reconnect saved hosts into the shared remote workspace without leaving the shell."
-              emptyDescription="No saved hosts loaded yet"
-              onActivate={activateSavedConnection}
-              onConnect={connectSavedConnection}
-              title="Saved Hosts"
-            />
-          </ShellCard>
-        </Col>
-
-        <Col xs={24} xl={10}>
-          <ShellCard title="Workspace" icon={<FolderOpenOutlined />}>
-            <Tabs
-              activeKey={state.activeWorkspacePane}
-              items={[
-                {
-                  key: 'files',
-                  label: 'Files',
-                  children: <FileManagerPane refreshToken={refreshToken} />,
-                },
-                {
-                  key: 'terminal',
-                  label: 'Terminal',
-                  children: <TerminalPane />,
-                },
-                {
-                  key: 'transfers',
-                  label: 'Transfers',
-                  children: (
-                    <TransferQueuePane
-                      onCancel={handleCancelTransfer}
-                      onRetry={handleRetryTransfer}
-                      tasks={state.transferQueue.tasks}
-                    />
-                  ),
-                },
-              ]}
-              onChange={(pane) =>
-                dispatch({
-                  type: 'workspace/paneActivated',
-                  payload: {
-                    pane: pane as 'files' | 'terminal' | 'transfers',
-                  },
-                })
-              }
-            />
-          </ShellCard>
-        </Col>
-
-        <Col xs={24} xl={7}>
-          <ShellCard title="Session Details" icon={<DeploymentUnitOutlined />}>
-            <SessionInspector />
-          </ShellCard>
-        </Col>
-      </Row>
-    </Space>
+    </section>
   );
 }
 

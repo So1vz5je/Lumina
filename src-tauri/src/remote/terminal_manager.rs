@@ -56,6 +56,18 @@ impl TerminalManager {
             .collect()
     }
 
+    pub fn interactive_session_for_connection(
+        &self,
+        connection_id: &str,
+    ) -> Option<RemoteTerminalSession> {
+        self.session_order
+            .iter()
+            .filter(|session_id| self.input_senders.contains_key(*session_id))
+            .filter_map(|session_id| self.sessions.get(session_id))
+            .find(|session| session.connection_id == connection_id)
+            .cloned()
+    }
+
     pub fn close_session(&mut self, session_id: &str) -> Result<(), String> {
         if self.sessions.remove(session_id).is_none() {
             return Err(format!("Terminal session not found: {}", session_id));
@@ -172,5 +184,23 @@ mod tests {
         let conn_1_sessions = manager.list_sessions_for_connection("conn-1");
         assert_eq!(conn_1_sessions.len(), 1);
         assert_eq!(conn_1_sessions[0].id, existing_session.id);
+    }
+
+    #[test]
+    fn returns_existing_interactive_session_for_connection() {
+        let mut manager = TerminalManager::default();
+
+        let session = manager.open_session("conn-1".into(), "analysis-shell".into());
+        let (sender, _receiver) = std::sync::mpsc::channel();
+
+        manager
+            .attach_input_sender(session.id.clone(), sender)
+            .expect("session should accept input sender");
+
+        let existing = manager
+            .interactive_session_for_connection("conn-1")
+            .expect("interactive session should be reused");
+
+        assert_eq!(existing.id, session.id);
     }
 }

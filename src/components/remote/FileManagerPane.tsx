@@ -32,7 +32,7 @@ import type {
 import { useRemoteWorkspace } from '../../modules/remote/RemoteWorkspaceProvider';
 import { FileConflictDialog } from './FileConflictDialog';
 
-const { Paragraph, Text } = Typography;
+const { Text } = Typography;
 
 export function FileManagerPane({
   refreshToken,
@@ -303,21 +303,23 @@ export function FileManagerPane({
 
   if (!activeConnection) {
     return (
-      <Empty
-        description="Connect a host to start browsing files."
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-      />
+      <div className="remote-file-manager-pane remote-file-manager-empty">
+        <Empty
+          description="Connect a host to start browsing files."
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+        />
+      </div>
     );
   }
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-      <div>
-        <Text strong>Active Path</Text>
-        <Paragraph style={{ marginBottom: 4 }}>
-          {state.remoteFiles.activePath ?? 'Loading remote root...'}
-        </Paragraph>
-        <Space size={[8, 8]} wrap>
+    <div className="remote-file-manager-pane">
+      <div className="remote-file-manager-path">
+        <div className="remote-file-manager-path-main">
+          <span>Active Path</span>
+          <strong>{state.remoteFiles.activePath ?? 'Loading remote root...'}</strong>
+        </div>
+        <div className="remote-file-manager-breadcrumbs">
           {state.remoteFiles.breadcrumbs.map((breadcrumb) => (
             <Button
               key={breadcrumb.path}
@@ -328,10 +330,10 @@ export function FileManagerPane({
               {breadcrumb.label}
             </Button>
           ))}
-        </Space>
+        </div>
       </div>
 
-      <Space size={[8, 8]} wrap>
+      <div className="remote-file-manager-toolbar">
         <Button
           disabled={!state.remoteFiles.activePath}
           icon={<UploadOutlined />}
@@ -382,37 +384,40 @@ export function FileManagerPane({
         >
           Refresh
         </Button>
-      </Space>
+      </div>
 
       {state.remoteFiles.lastError ? (
         <Tag color="error">{state.remoteFiles.lastError}</Tag>
       ) : null}
 
-      <Spin spinning={state.remoteFiles.isLoading}>
-        <Table<RemoteFileEntry>
-          columns={columns}
-          dataSource={state.remoteFiles.entries}
-          locale={{ emptyText: 'No files in this directory' }}
-          pagination={false}
-          rowKey="path"
-          rowSelection={{
-            selectedRowKeys: state.remoteFiles.selectedRemotePaths,
-            onChange: (keys) =>
-              dispatch({
-                type: 'files/selectionSet',
-                payload: { paths: keys.map(String) },
-              }),
-          }}
-          size="small"
-          onRow={(entry) => ({
-            onDoubleClick: () => {
-              if (entry.entryType === 'directory') {
-                void loadDirectory(entry.path);
-              }
-            },
-          })}
-        />
-      </Spin>
+      <div className="remote-file-manager-table-shell">
+        <Spin spinning={state.remoteFiles.isLoading}>
+          <Table<RemoteFileEntry>
+            className="remote-file-manager-table"
+            columns={columns}
+            dataSource={state.remoteFiles.entries}
+            locale={{ emptyText: 'No files in this directory' }}
+            pagination={false}
+            rowKey="path"
+            rowSelection={{
+              selectedRowKeys: state.remoteFiles.selectedRemotePaths,
+              onChange: (keys) =>
+                dispatch({
+                  type: 'files/selectionSet',
+                  payload: { paths: keys.map(String) },
+                }),
+            }}
+            size="small"
+            onRow={(entry) => ({
+              onDoubleClick: () => {
+                if (entry.entryType === 'directory') {
+                  void loadDirectory(entry.path);
+                }
+              },
+            })}
+          />
+        </Spin>
+      </div>
 
       <FileConflictDialog
         onCancel={() => setPendingTransfer(null)}
@@ -420,7 +425,7 @@ export function FileManagerPane({
         open={Boolean(pendingTransfer)}
         preparation={pendingTransfer?.preparation ?? null}
       />
-    </Space>
+    </div>
   );
 }
 

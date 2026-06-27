@@ -3,7 +3,7 @@
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useEffect } from 'react';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RemoteWorkspaceProvider, useRemoteWorkspace } from '../../modules/remote/RemoteWorkspaceProvider';
 import { TerminalPane } from './TerminalPane';
 
@@ -83,6 +83,11 @@ function TerminalPaneHarness() {
 }
 
 describe('TerminalPane', () => {
+  beforeEach(() => {
+    invokeMock.mockClear();
+    listenMock.mockClear();
+  });
+
   it('adds a new terminal tab for the active connection', async () => {
     render(
       <RemoteWorkspaceProvider>
@@ -90,12 +95,42 @@ describe('TerminalPane', () => {
       </RemoteWorkspaceProvider>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'New Terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Terminal' }));
 
     expect(await screen.findByRole('tab', { name: 'term-1' })).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith('remote_open_terminal_session', {
       connectionId: 'conn-1',
       title: 'term-1',
     });
+  });
+
+  it('reuses the active connection terminal instead of opening a new one repeatedly', async () => {
+    render(
+      <RemoteWorkspaceProvider>
+        <TerminalPaneHarness />
+      </RemoteWorkspaceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Terminal' }));
+    expect(await screen.findByRole('tab', { name: 'term-1' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Terminal' }));
+
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'remote_open_terminal_session')).toHaveLength(1);
+  });
+
+  it('uses a full-height terminal workbench surface', async () => {
+    const { container } = render(
+      <RemoteWorkspaceProvider>
+        <TerminalPaneHarness />
+      </RemoteWorkspaceProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Terminal' }));
+
+    expect(container.querySelector('.remote-terminal-pane')).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: 'term-1' })).toBeInTheDocument();
+    expect(container.querySelector('.remote-terminal-output')).toBeInTheDocument();
+    expect(container.querySelector('.remote-terminal-stage')).toBeInTheDocument();
   });
 });

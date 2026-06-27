@@ -341,6 +341,12 @@ fn remote_open_active_terminal_session(
             .lock()
             .map_err(|_| "Failed to lock terminal manager".to_string())?;
 
+        if let Some(existing_session) =
+            terminal_manager.interactive_session_for_connection(&connection_id)
+        {
+            return Ok(existing_session);
+        }
+
         open_terminal_session_for_connection(
             &connection_manager,
             &mut terminal_manager,

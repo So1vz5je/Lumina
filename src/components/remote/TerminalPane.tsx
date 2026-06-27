@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Button, Empty, Input, Space, Tabs, Typography } from 'antd';
+import { Button, Empty, Input, Tabs, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useRemoteWorkspace } from '../../modules/remote/RemoteWorkspaceProvider';
 
@@ -89,8 +89,16 @@ export function TerminalPane() {
     };
   }, [dispatch]);
 
-  const handleNewTerminal = async () => {
+  const handleOpenTerminal = async () => {
     if (!activeConnectionId) {
+      return;
+    }
+
+    if (activeTerminalTabId) {
+      dispatch({
+        type: 'terminal/activated',
+        payload: { terminalTabId: activeTerminalTabId },
+      });
       return;
     }
 
@@ -137,66 +145,59 @@ export function TerminalPane() {
   };
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-      <Space
-        align="center"
-        size={12}
-        style={{ justifyContent: 'space-between', width: '100%' }}
-      >
+    <div className="remote-terminal-pane">
+      <div className="remote-terminal-toolbar">
         <Button
           disabled={!activeConnectionId}
-          onClick={() => void handleNewTerminal()}
+          onClick={() => void handleOpenTerminal()}
           type="primary"
         >
-          New Terminal
+          Open Terminal
         </Button>
         <Text type="secondary">
           {activeConnectionId
-            ? 'Open parallel shells for the active remote host.'
+            ? activeConnectionTabs.length > 0
+              ? `${activeConnectionTabs.length} terminal session${activeConnectionTabs.length > 1 ? 's' : ''} retained`
+              : 'Open a retained shell for the active remote host.'
             : 'Connect a host to start a terminal session.'}
         </Text>
-      </Space>
+      </div>
 
-      {activeConnectionTabs.length > 0 ? (
-        <Tabs
-          activeKey={activeTerminalTabId ?? undefined}
-          items={activeConnectionTabs.map((terminalTab) => ({
-            key: terminalTab.id,
-            label: terminalTab.title,
-            children: (
-              <pre
-                style={{
-                  margin: 0,
-                  minHeight: 260,
-                  padding: 16,
-                  borderRadius: 12,
-                  background: 'rgba(0, 0, 0, 0.24)',
-                  color: '#f5f5f5',
-                  overflowX: 'auto',
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {terminalTab.lines.length > 0
-                  ? terminalTab.lines.join('\n\n')
-                  : 'Session ready. Run a command to see output here.'}
-              </pre>
-            ),
-          }))}
-          onChange={(terminalTabId) =>
-            dispatch({
-              type: 'terminal/activated',
-              payload: { terminalTabId },
-            })
-          }
-        />
-      ) : (
-        <Empty
-          description="No terminal sessions open yet"
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-        />
-      )}
+      <div className="remote-terminal-stage">
+        {activeConnectionTabs.length > 0 ? (
+          <Tabs
+            activeKey={activeTerminalTabId ?? undefined}
+            className="remote-terminal-tabs"
+            items={activeConnectionTabs.map((terminalTab) => ({
+              key: terminalTab.id,
+              label: terminalTab.title,
+              children: (
+                <pre className="remote-terminal-output">
+                  {terminalTab.lines.length > 0
+                    ? terminalTab.lines.join('\n\n')
+                    : 'Session ready. Run a command to see output here.'}
+                </pre>
+              ),
+            }))}
+            onChange={(terminalTabId) =>
+              dispatch({
+                type: 'terminal/activated',
+                payload: { terminalTabId },
+              })
+            }
+          />
+        ) : (
+          <div className="remote-terminal-empty">
+            <Empty
+              description="No terminal sessions open yet"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          </div>
+        )}
+      </div>
 
       <Input.Search
+        className="remote-terminal-input"
         disabled={!activeTerminalTabId}
         enterButton="Send"
         onChange={(event) => setCommand(event.target.value)}
@@ -204,6 +205,6 @@ export function TerminalPane() {
         placeholder="Run command"
         value={command}
       />
-    </Space>
+    </div>
   );
 }

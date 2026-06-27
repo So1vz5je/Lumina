@@ -51,7 +51,7 @@ beforeAll(() => {
 
 describe('RemoteWorkspace', () => {
   it('renders the remote shell with file and transfer workspace panes', () => {
-    render(
+    const { container } = render(
       <RemoteWorkspaceProvider>
         <RemoteWorkspace />
       </RemoteWorkspaceProvider>,
@@ -60,7 +60,10 @@ describe('RemoteWorkspace', () => {
     expect(
       screen.getByRole('heading', { name: 'Remote Workspace' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Connections')).toBeInTheDocument();
+    expect(container.querySelector('.remote-workspace-shell')).toBeInTheDocument();
+    expect(container.querySelector('.remote-workspace-panel-main')).toBeInTheDocument();
+    expect(container.querySelector('.remote-workspace-shell .ant-card')).not.toBeInTheDocument();
+    expect(screen.getByText('Saved Hosts')).toBeInTheDocument();
     expect(screen.getByText('Workspace')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Files' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Terminal' })).toBeInTheDocument();
@@ -68,6 +71,6 @@ describe('RemoteWorkspace', () => {
     expect(
       screen.getByText('Connect a host to start browsing files.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('Session Details')).toBeInTheDocument();
+    expect(screen.getByText('Session Snapshot')).toBeInTheDocument();
   });
 });

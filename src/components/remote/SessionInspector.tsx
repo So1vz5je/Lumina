@@ -2,7 +2,7 @@ import { CloudServerOutlined } from '@ant-design/icons';
 import { Descriptions, Space, Tag, Typography } from 'antd';
 import { useRemoteWorkspace } from '../../modules/remote/RemoteWorkspaceProvider';
 
-const { Paragraph, Text, Title } = Typography;
+const { Text } = Typography;
 
 export function SessionInspector() {
   const { state } = useRemoteWorkspace();
@@ -15,17 +15,7 @@ export function SessionInspector() {
   const failedTransfers = state.transferQueue.failedTaskIds.length;
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-      <div>
-        <Title level={5} style={{ marginBottom: 4 }}>
-          Connection Snapshot
-        </Title>
-        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          Remote host metadata will expand here as the shared workspace grows
-          beyond a single command panel.
-        </Paragraph>
-      </div>
-
+    <div className="remote-session-inspector">
       <Descriptions column={1} size="small" bordered>
         <Descriptions.Item label="Host">
           {activeConnection ? (
@@ -62,6 +52,6 @@ export function SessionInspector() {
           </Space>
         </Descriptions.Item>
       </Descriptions>
-    </Space>
+    </div>
   );
 }
