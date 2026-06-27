@@ -1561,6 +1561,16 @@ describe('ModuleDetail Linux remote module rendering', () => {
     });
   });
 
+  it('collects Linux suspicious file scan results without fixed head truncation', async () => {
+    renderRemoteModule('suspicious_files', '');
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('ssh_execute', expect.anything()));
+
+    const sshCommand = invokeMock.mock.calls.find(([command]) => command === 'ssh_execute')?.[1] as { command?: string };
+    expect(sshCommand?.command).toBeTruthy();
+    expect(sshCommand?.command).not.toMatch(/\|\s*head\b/);
+  });
+
   it('structures webshell scan hits with language, rule, risk, and evidence snippet', async () => {
     const { container } = renderRemoteModule(
       'webshell_scan',
@@ -1587,6 +1597,16 @@ describe('ModuleDetail Linux remote module rendering', () => {
       expect(screen.getByText('shell.php')).toBeInTheDocument();
       expect(screen.getByText('cmd.jsp')).toBeInTheDocument();
     });
+  });
+
+  it('collects Linux webshell scan hits without fixed head truncation', async () => {
+    renderRemoteModule('webshell_scan', '');
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('ssh_execute', expect.anything()));
+
+    const sshCommand = invokeMock.mock.calls.find(([command]) => command === 'ssh_execute')?.[1] as { command?: string };
+    expect(sshCommand?.command).toBeTruthy();
+    expect(sshCommand?.command).not.toMatch(/\|\s*head\b/);
   });
 
   it('exports Docker container IDs from configured columns', async () => {

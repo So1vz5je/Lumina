@@ -32,6 +32,14 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 }));
 
 beforeAll(() => {
+  const originalGetComputedStyle = window.getComputedStyle.bind(window);
+  const getComputedStyleMock = vi.fn((element: Element) => originalGetComputedStyle(element));
+  Object.defineProperty(window, 'getComputedStyle', {
+    writable: true,
+    value: getComputedStyleMock,
+  });
+  vi.stubGlobal('getComputedStyle', getComputedStyleMock);
+
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
