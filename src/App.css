@@ -7493,6 +7493,225 @@ body {
   border-radius: 6px;
 }
 
+.analysis-workbench .scan-results-tabs {
+  margin: 0 18px 18px;
+}
+
+.analysis-workbench .scan-results-tabs .ant-tabs-nav {
+  margin: 0 0 12px !important;
+}
+
+.analysis-workbench .scan-results-tabs .ant-tabs-nav::before {
+  border-bottom-color: #dfe7f0;
+}
+
+.analysis-workbench.dark .scan-results-tabs .ant-tabs-nav::before {
+  border-bottom-color: #273548;
+}
+
+.analysis-workbench .scan-results-tabs .ant-tabs-tab {
+  padding: 10px 0 12px;
+}
+
+.analysis-workbench .scan-assessment-tab {
+  display: grid;
+  gap: 14px;
+}
+
+.analysis-workbench .scan-verdict-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid #dfe7f0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #ffffff 0%, #f7fbff 100%);
+}
+
+.analysis-workbench.dark .scan-verdict-banner {
+  border-color: #263446;
+  background: linear-gradient(135deg, #111a25 0%, #0c121b 100%);
+}
+
+.analysis-workbench .scan-verdict-banner.critical {
+  border-color: #edb4a3;
+  background: linear-gradient(135deg, #fff4ef 0%, #fff8f5 100%);
+}
+
+.analysis-workbench.dark .scan-verdict-banner.critical {
+  border-color: #6d2b1f;
+  background: linear-gradient(135deg, #24130f 0%, #171010 100%);
+}
+
+.analysis-workbench .scan-verdict-banner.high {
+  border-color: #f3c785;
+  background: linear-gradient(135deg, #fffaf1 0%, #fffdf8 100%);
+}
+
+.analysis-workbench.dark .scan-verdict-banner.high {
+  border-color: #72501f;
+  background: linear-gradient(135deg, #20160c 0%, #15100a 100%);
+}
+
+.analysis-workbench .scan-verdict-banner.medium {
+  border-color: #aad0f3;
+  background: linear-gradient(135deg, #f6fbff 0%, #f9fdff 100%);
+}
+
+.analysis-workbench.dark .scan-verdict-banner.medium {
+  border-color: #244a70;
+  background: linear-gradient(135deg, #101923 0%, #0d131b 100%);
+}
+
+.analysis-workbench .scan-verdict-banner.low {
+  border-color: #b9e3c9;
+  background: linear-gradient(135deg, #f4fff6 0%, #f8fffa 100%);
+}
+
+.analysis-workbench.dark .scan-verdict-banner.low {
+  border-color: #234930;
+  background: linear-gradient(135deg, #0f1b14 0%, #0c130f 100%);
+}
+
+.analysis-workbench .scan-verdict-banner-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.analysis-workbench .scan-verdict-banner-copy h3 {
+  margin: 0 !important;
+  color: #13233a;
+  font-size: 22px !important;
+  line-height: 30px !important;
+}
+
+.analysis-workbench.dark .scan-verdict-banner-copy h3 {
+  color: #f3f6fa !important;
+}
+
+.analysis-workbench .scan-verdict-banner-copy .ant-typography {
+  max-width: 900px;
+  color: #415167 !important;
+  font-size: 14px !important;
+  line-height: 22px;
+}
+
+.analysis-workbench.dark .scan-verdict-banner-copy .ant-typography {
+  color: #c7d0dc !important;
+}
+
+.analysis-workbench .scan-assessment-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid #dfe7f0;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.analysis-workbench.dark .scan-assessment-panel {
+  border-color: #263446;
+  background: #0f1722;
+}
+
+.analysis-workbench .scan-assessment-caption {
+  margin: 0 !important;
+  color: #64748b !important;
+  font-size: 12px !important;
+  line-height: 18px;
+}
+
+.analysis-workbench.dark .scan-assessment-caption {
+  color: #9aa9bc !important;
+}
+
+.analysis-workbench .scan-assessment-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.analysis-workbench .scan-attack-select {
+  min-width: 240px;
+}
+
+.analysis-workbench .scan-attack-coverage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analysis-workbench .scan-attack-coverage-chip,
+.analysis-workbench .scan-risk-attack-tag,
+.analysis-workbench .scan-risk-tech-tag,
+.analysis-workbench .scan-risk-category-tag,
+.analysis-workbench .scan-risk-confidence-tag {
+  border-radius: 999px;
+  background: #f4f8fc;
+  color: #31506f;
+}
+
+.analysis-workbench.dark .scan-attack-coverage-chip,
+.analysis-workbench.dark .scan-risk-attack-tag,
+.analysis-workbench.dark .scan-risk-tech-tag,
+.analysis-workbench.dark .scan-risk-category-tag,
+.analysis-workbench.dark .scan-risk-confidence-tag {
+  border-color: #2c3a4e;
+  background: #101a27;
+  color: #c7d0dc;
+}
+
+.analysis-workbench .scan-risk-grid-expanded {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.analysis-workbench .scan-risk-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.analysis-workbench .scan-risk-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.analysis-workbench .scan-risk-action-list {
+  display: grid;
+  gap: 6px;
+}
+
+.analysis-workbench .scan-risk-action-list > .ant-typography {
+  color: #64748b !important;
+  font-size: 11px !important;
+  font-weight: 750;
+}
+
+.analysis-workbench.dark .scan-risk-action-list > .ant-typography {
+  color: #9aa9bc !important;
+}
+
+.analysis-workbench .scan-risk-action-list ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #36465a;
+}
+
+.analysis-workbench.dark .scan-risk-action-list ul {
+  color: #c7d0dc;
+}
+
+.analysis-workbench .scan-risk-action-list li {
+  margin: 2px 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
 .analysis-workbench .scan-risk-panel {
   margin: 12px 18px 14px;
   padding: 14px;

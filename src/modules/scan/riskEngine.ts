@@ -1,4 +1,12 @@
-import type { AnalysisResult, RiskFinding, RiskSeverity } from '../../types/analysis';
+import type {
+  AnalysisResult,
+  RiskFinding,
+  RiskSeverity,
+  ScanAssessment,
+  ScanAssessmentSeverityCounts,
+  ScanAssessmentTacticCoverage,
+  ScanAssessmentVerdict,
+} from '../../types/analysis';
 
 export type { RiskFinding, RiskSeverity };
 
@@ -19,6 +27,12 @@ const severityRank: Record<RiskSeverity, number> = {
 const webshellPattern = /\b(eval|assert|base64_decode|gzinflate|shell_exec|passthru|system|cmd\.exe|powershell|runtime\.getruntime|processbuilder|wscript\.shell)\b/i;
 const scriptExtensionPattern = /\.(php\d*|phtml|inc|asp|aspx|asa|ashx|jsp|jspx)$/i;
 const suspiciousCommandPattern = /(encodedcommand|-enc\b|frombase64string|downloadstring|invoke-expression|\biex\b|mshta|rundll32|regsvr32|wscript|cscript|bitsadmin|certutil|startup|appdata|\\temp\\|\\users\\public\\)/i;
+const assessmentVerdictLabels: Record<ScanAssessmentVerdict, string> = {
+  compromised: '疑似入侵',
+  suspicious: '存在可疑迹象',
+  attention: '需关注复核',
+  clean: '未发现明显风险',
+};
 
 function isRecord(value: unknown): value is DetailRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -86,6 +100,10 @@ function pushFinding(findings: RiskFinding[], finding: RiskFinding) {
   existing.affected = uniqueStrings([...existing.affected, ...finding.affected]);
   existing.evidence = [...existing.evidence, ...finding.evidence];
   existing.recommendedActions = uniqueStrings([...existing.recommendedActions, ...finding.recommendedActions]);
+}
+
+function createFindingMeta(category: string, attackTactic: string, attackTechnique: string) {
+  return { category, attackTactic, attackTechnique };
 }
 
 export function mergeRiskFindings(groups: RiskFinding[][]): RiskFinding[] {
@@ -188,6 +206,7 @@ function buildWebshellFindings(results: AnalysisResult[], findings: RiskFinding[
     pushFinding(findings, {
       id: makeId('webshell', path),
       severity: 'critical',
+      ...createFindingMeta('webshell', '持久化 (Persistence)', 'T1505.003 Web Shell'),
       title: '疑似 WebShell 文件',
       reason: `Web 目录脚本命中高危执行特征：${reason || 'eval/base64_decode/system 等可疑代码特征'}`,
       confidence: 92,
@@ -243,6 +262,7 @@ function buildProcessNetworkFindings(results: AnalysisResult[], findings: RiskFi
       pushFinding(findings, {
         id: makeId('process-network', `${processName}-${pid}-${endpoint}`),
         severity: 'high',
+        ...createFindingMeta('process-network', '命令与控制 (C2)', 'T1071 应用层协议'),
         title: '可疑进程外联',
         reason: `${processName} 同时被进程分析标记可疑，并存在外联连接 ${endpoint}。`,
         confidence: 86,
@@ -294,6 +314,7 @@ function buildPersistenceFindings(results: AnalysisResult[], findings: RiskFindi
       pushFinding(findings, {
         id: makeId('persistence', `${moduleName}-${title}-${command}`),
         severity: suspiciousCommandPattern.test(command) ? 'high' : 'medium',
+        ...createFindingMeta('persistence', '持久化 (Persistence)', 'T1053/T1547 计划任务与自启动'),
         title: '可疑持久化入口',
         reason: reason || `${title} 指向高风险命令或用户可写路径。`,
         confidence: suspiciousCommandPattern.test(command) ? 84 : 72,
@@ -330,6 +351,17 @@ function buildSecurityFindings(results: AnalysisResult[], findings: RiskFinding[
     pushFinding(findings, {
       id: makeId('security-event', `${eventId}-${eventType}-${sourceIp}`),
       severity: eventId === '1102' ? 'critical' : isHighValueEvent ? 'high' : 'medium',
+      ...createFindingMeta(
+        eventId === '1102'
+          ? 'defense-evasion'
+          : 'account-manipulation',
+        eventId === '1102'
+          ? '防御规避 (Defense Evasion)'
+          : '权限提升 (Privilege Escalation)',
+        eventId === '1102'
+          ? 'T1070.001 清除事件日志'
+          : 'T1136/T1098 账户创建与操作',
+      ),
       title: eventId === '1102' ? '安全日志被清除' : '高价值安全事件',
       reason: description || `${eventType} 需要人工复核。`,
       confidence: isHighValueEvent ? 82 : 70,
@@ -359,6 +391,11 @@ function buildSecurityFindings(results: AnalysisResult[], findings: RiskFinding[
     pushFinding(findings, {
       id: makeId('security-posture', name),
       severity: /defender|实时防护|排除/i.test(`${name} ${detail}`) ? 'high' : 'medium',
+      ...createFindingMeta(
+        'defense-evasion',
+        '防御规避 (Defense Evasion)',
+        'T1562 削弱防御机制',
+      ),
       title: '关键安全防护异常',
       reason: detail || name,
       confidence: 78,
@@ -394,6 +431,7 @@ function buildDockerFindings(results: AnalysisResult[], findings: RiskFinding[])
     pushFinding(findings, {
       id: makeId('docker', name),
       severity: /privileged|docker\.sock|\/var\/run\/docker/i.test(text) ? 'high' : 'medium',
+      ...createFindingMeta('container', '权限提升 (Privilege Escalation)', 'T1610 部署容器'),
       title: '可疑容器暴露或挂载',
       reason: reason || '容器存在敏感端口暴露、特权运行或宿主机敏感挂载迹象。',
       confidence: 76,
@@ -425,6 +463,7 @@ function buildPanelContextFindings(results: AnalysisResult[], findings: RiskFind
     pushFinding(findings, {
       id: makeId('panel-context', `${name}-${path}`),
       severity: 'medium',
+      ...createFindingMeta('panel-context', '初始访问面 (上下文)', 'T1190 利用面向公众的应用'),
       title: '发现 Web 面板或集成环境',
       reason: '该发现用于提供 Web 入侵面上下文，单独发现面板不等于入侵。',
       confidence: 68,
@@ -456,3 +495,128 @@ export function buildRiskFindings(results: AnalysisResult[]): RiskFinding[] {
 
   return mergeRiskFindings([findings]);
 }
+
+function countSeverities(findings: RiskFinding[]): ScanAssessmentSeverityCounts {
+  return findings.reduce(
+    (counts, finding) => {
+      counts[finding.severity] += 1;
+      return counts;
+    },
+    { critical: 0, high: 0, medium: 0, low: 0 },
+  );
+}
+
+function buildTacticCoverage(findings: RiskFinding[]): ScanAssessmentTacticCoverage[] {
+  const coverage = new Map<string, number>();
+  findings.forEach((finding) => {
+    const tactic = finding.attackTactic || '未分类战术';
+    coverage.set(tactic, (coverage.get(tactic) || 0) + 1);
+  });
+
+  return Array.from(coverage.entries())
+    .map(([tactic, count]) => ({ tactic, count }))
+    .sort((a, b) => b.count - a.count || a.tactic.localeCompare(b.tactic, 'zh-Hans-CN'));
+}
+
+function buildAssessmentHeadline(verdict: ScanAssessmentVerdict, severityCounts: ScanAssessmentSeverityCounts): string {
+  if (verdict === 'compromised') {
+    return severityCounts.high > 0
+      ? `发现 ${severityCounts.critical} 项严重风险、${severityCounts.high} 项高危风险，主机疑似已被入侵`
+      : `发现 ${severityCounts.critical} 项严重风险，主机疑似已被入侵`;
+  }
+
+  if (verdict === 'suspicious') {
+    return `发现 ${severityCounts.high} 项高危风险，主机存在明显可疑迹象`;
+  }
+
+  if (verdict === 'attention') {
+    return `发现 ${severityCounts.medium} 项中风险，建议继续复核`;
+  }
+
+  return '未发现明显风险项';
+}
+
+export function computeAssessment(findings: RiskFinding[]): ScanAssessment {
+  const severityCounts = countSeverities(findings);
+  const verdict: ScanAssessmentVerdict = severityCounts.critical > 0
+    ? 'compromised'
+    : severityCounts.high > 0
+      ? 'suspicious'
+      : severityCounts.medium > 0
+        ? 'attention'
+        : 'clean';
+
+  return {
+    verdict,
+    severityCounts,
+    tacticCoverage: buildTacticCoverage(findings),
+    headline: buildAssessmentHeadline(verdict, severityCounts),
+  };
+}
+
+function formatEvidenceLine(finding: RiskFinding): string {
+  const evidenceLines = finding.evidence.map((item) => `- ${item.moduleName}｜${item.label}: ${item.value}${item.time ? `（${item.time}）` : ''}`);
+  return evidenceLines.join('\n');
+}
+
+function formatAffectedLine(finding: RiskFinding): string {
+  return finding.affected.length > 0 ? finding.affected.map((item) => `- ${item}`).join('\n') : '-';
+}
+
+function formatActionsLine(finding: RiskFinding): string {
+  return finding.recommendedActions.length > 0
+    ? finding.recommendedActions.map((item) => `- ${item}`).join('\n')
+    : '-';
+}
+
+export function buildMarkdownReport(findings: RiskFinding[], assessment: ScanAssessment, reportDate: string): string {
+  const lines: string[] = [
+    `# Lumina 研判报告`,
+    '',
+    `- 报告日期：${reportDate}`,
+    `- 研判结论：${assessment.verdict === 'compromised'
+      ? '疑似入侵'
+      : assessment.verdict === 'suspicious'
+        ? '存在可疑迹象'
+        : assessment.verdict === 'attention'
+          ? '需关注复核'
+          : '未发现明显风险'}`,
+    `- 结论摘要：${assessment.headline}`,
+    '',
+    '## 严重级态势',
+    `- Critical：${assessment.severityCounts.critical}`,
+    `- High：${assessment.severityCounts.high}`,
+    `- Medium：${assessment.severityCounts.medium}`,
+    `- Low：${assessment.severityCounts.low}`,
+    '',
+    '## ATT&CK 战术覆盖',
+    assessment.tacticCoverage.length > 0
+      ? assessment.tacticCoverage.map((item) => `- ${item.tactic}：${item.count}`).join('\n')
+      : '-',
+    '',
+    '## 发现明细',
+  ];
+
+  findings.forEach((finding, index) => {
+    lines.push(
+      `### ${index + 1}. ${finding.title}`,
+      `- 严重级别：${finding.severity}`,
+      `- 分类：${finding.category}`,
+      `- ATT&CK 战术：${finding.attackTactic}`,
+      `- ATT&CK 技术：${finding.attackTechnique}`,
+      `- 置信度：${finding.confidence}%`,
+      `- 判定理由：${finding.reason}`,
+      `- 影响对象：`,
+      formatAffectedLine(finding),
+      `- 证据：`,
+      formatEvidenceLine(finding),
+      `- 处置建议：`,
+      formatActionsLine(finding),
+      '',
+    );
+  });
+
+  return `${lines.join('\n')}`.trimEnd();
+}
+
+export { assessmentVerdictLabels };

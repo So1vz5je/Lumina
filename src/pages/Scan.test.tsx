@@ -56,6 +56,9 @@ describe('Scan', () => {
       {
         id: 'backend-risk-1',
         severity: 'high',
+        category: 'unknown',
+        attackTactic: '未分类战术',
+        attackTechnique: '未分类技术',
         title: '后端高危发现',
         reason: 'backend risk correlation',
         confidence: 88,

@@ -803,10 +803,10 @@ describe('ModuleDetail Linux remote module rendering', () => {
     );
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('ssh_execute', expect.anything()));
-    expect(container.querySelector('.linux-file-manager-dark')).toBeInTheDocument();
-    expect(container.querySelector('.linux-file-manager-header')).toBeInTheDocument();
-    expect(container.querySelector('.linux-file-manager-list')).toBeInTheDocument();
-    expect(container.querySelector('.linux-file-manager-table')).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelector('.linux-file-manager-dark')).toBeInTheDocument());
+    await waitFor(() => expect(container.querySelector('.linux-file-manager-header')).toBeInTheDocument());
+    await waitFor(() => expect(container.querySelector('.linux-file-manager-list')).toBeInTheDocument());
+    await waitFor(() => expect(container.querySelector('.linux-file-manager-table')).toBeInTheDocument());
   });
 
   it('uses the Linux workbench shell for the remote terminal page', async () => {
