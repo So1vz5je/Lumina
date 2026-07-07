@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+import type { RiskFinding } from '../types/analysis';
 import Results from './Results';
 
 beforeAll(() => {
@@ -30,28 +31,47 @@ beforeAll(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverMock);
 });
 
-describe('Results', () => {
-  it('renders provided scan results instead of mock data', async () => {
-    const results = [
+function makeFinding(overrides: Partial<RiskFinding>): RiskFinding {
+  return {
+    id: 'finding-1',
+    severity: 'high',
+    category: 'process-network',
+    attackTactic: '命令与控制 (C2)',
+    attackTechnique: 'T1071 应用层协议',
+    title: '可疑进程外联',
+    reason: '进程命中可疑规则并存在外联',
+    confidence: 86,
+    affected: ['powershell.exe'],
+    evidence: [
       {
-        module_name: 'security_events',
-        status: 'warning',
-        summary: 'Detected failed logons from 10.0.0.8',
-        details: { failed_logins: 3 },
+        moduleName: 'process',
+        label: 'powershell.exe',
+        value: 'EncodedCommand',
       },
-    ];
+      {
+        moduleName: 'network',
+        label: '198.51.100.22:4444',
+        value: 'TCP ESTABLISHED',
+      },
+    ],
+    recommendedActions: ['确认进程路径', '阻断外联地址'],
+    ...overrides,
+  };
+}
 
-    const { container } = render(<Results results={results} />);
+async function openModuleDetail(container: HTMLElement, moduleName: string) {
+  fireEvent.click(screen.getByRole('tab', { name: '模块详情' }));
+  await waitFor(() => expect(screen.getByRole('tab', { name: '模块详情' })).toHaveAttribute('aria-selected', 'true'));
+  await waitFor(() => expect(container.querySelector('.scan-module-strip')).toBeInTheDocument());
+  fireEvent.click(
+    within(container.querySelector('.scan-module-strip') as HTMLElement).getByRole('tab', {
+      name: new RegExp(moduleName),
+    }),
+  );
+}
 
-    fireEvent.click(screen.getAllByText('security_events')[0]);
-
-    expect(
-      screen.getAllByText('Detected failed logons from 10.0.0.8').length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByText(/failed_logins/i)).toBeInTheDocument();
-  });
-
-  it('renders results in the scan workspace shell with status summary', () => {
+describe('Results', () => {
+  it('renders the verdict-first assessment tab with ATT&CK coverage', () => {
     const results = [
       {
         module_name: 'system_info',
@@ -59,103 +79,41 @@ describe('Results', () => {
         summary: 'Host baseline collected',
         details: { hostname: 'WIN-IR' },
       },
-      {
-        module_name: 'security_events',
-        status: 'warning',
-        summary: 'Detected suspicious logons',
-        details: { suspicious_events: [] },
-      },
-    ];
-
-    const { container } = render(<Results results={results} />);
-
-    expect(container.querySelector('.scan-results-workspace')).toBeInTheDocument();
-    expect(container.querySelector('.scan-results-commandbar')).toBeInTheDocument();
-    expect(container.querySelector('.scan-results-scope-strip')).not.toBeInTheDocument();
-    expect(container.querySelector('.scan-risk-panel')).toBeInTheDocument();
-    expect(container.querySelector('.scan-results-soc-shell')).toBeInTheDocument();
-    expect(container.querySelector('.scan-module-rail')).not.toBeInTheDocument();
-    expect(container.querySelector('.scan-module-strip')).toBeInTheDocument();
-    expect(container.querySelector('.scan-result-detail-panel')).toBeInTheDocument();
-    expect(container.querySelector('.scan-results-overview')).not.toBeInTheDocument();
-    expect(screen.getByText('应急扫描结果')).toBeInTheDocument();
-    expect(screen.getByText(/本机分析模块/)).toBeInTheDocument();
-    expect(screen.getAllByText('处置').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('系统信息').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('安全事件').length).toBeGreaterThan(0);
-  });
-
-  it('puts risk findings before module details after a scan', () => {
-    const results = [
-      {
-        module_name: 'panel',
-        status: 'info',
-        summary: '检测到 phpStudy',
-        details: {
-          detected_installs: [
-            {
-              panel_type: 'phpstudy',
-              name: 'PhpStudy Pro',
-              path: 'D:\\ctf-tools\\phpstudy_pro\\COM',
-              site_root: 'D:\\ctf-tools\\phpstudy_pro\\WWW',
-              detected: true,
-            },
-          ],
-        },
-      },
-      {
-        module_name: 'file_scan',
-        status: 'warning',
-        summary: '发现可疑脚本',
-        details: {
-          findings: [
-            {
-              name: 'shell.php',
-              path: 'D:\\ctf-tools\\phpstudy_pro\\WWW\\upload\\shell.php',
-              suspicious: true,
-              reason: 'PHP code contains eval and base64_decode',
-              last_modified: '2026-06-26 14:12:03',
-            },
-          ],
-        },
-      },
-    ];
-
-    const { container } = render(<Results results={results} />);
-
-    expect(container.querySelector('.scan-risk-panel')).toBeInTheDocument();
-    expect(screen.getByText('高危发现')).toBeInTheDocument();
-    expect(screen.getByText('疑似 WebShell 文件')).toBeInTheDocument();
-    expect(screen.getByText('Critical')).toBeInTheDocument();
-    expect(screen.getAllByText(/D:\\ctf-tools\\phpstudy_pro\\WWW\\upload\\shell\.php/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/立即隔离该脚本文件/)).toBeInTheDocument();
-  });
-
-  it('renders backend risk findings when the scan payload provides them', () => {
-    const results = [
-      {
-        module_name: 'process',
-        status: 'warning',
-        summary: '发现可疑进程',
-        details: {
-          suspicious_list: [
-            {
-              pid: 4321,
-              name: 'powershell.exe',
-              suspicious_reason: 'EncodedCommand',
-            },
-          ],
-        },
-      },
     ];
     const riskFindings = [
-      {
-        id: 'backend-persistence-risk',
+      makeFinding({
+        id: 'critical-webshell',
+        severity: 'critical',
+        category: 'webshell',
+        attackTactic: '持久化 (Persistence)',
+        attackTechnique: 'T1505.003 Web Shell',
+        title: '疑似 WebShell 文件',
+        reason: 'Web 目录脚本命中高危执行特征',
+        affected: ['D:\\www\\shell.php'],
+        evidence: [
+          {
+            moduleName: 'file_scan',
+            label: 'shell.php',
+            value: 'D:\\www\\shell.php',
+            time: '2026-06-26 14:12:03',
+          },
+          {
+            moduleName: 'panel',
+            label: 'phpStudy Pro',
+            value: 'D:\\www',
+          },
+        ],
+        recommendedActions: ['立即隔离样本', '检查访问日志'],
+      }),
+      makeFinding({
+        id: 'medium-persistence',
         severity: 'high',
-        title: '后端关联高危发现',
-        reason: '后端规则已关联进程、网络和持久化证据。',
-        confidence: 91,
-        affected: ['powershell.exe'],
+        category: 'process-network',
+        attackTactic: '命令与控制 (C2)',
+        attackTechnique: 'T1071 应用层协议',
+        title: '可疑进程外联',
+        reason: '进程命中可疑规则并存在外联',
+        affected: ['powershell.exe', '198.51.100.22:4444'],
         evidence: [
           {
             moduleName: 'process',
@@ -163,18 +121,28 @@ describe('Results', () => {
             value: 'EncodedCommand',
           },
         ],
-        recommendedActions: ['优先隔离主机并导出进程证据'],
-      },
+        recommendedActions: ['确认进程路径', '阻断外联地址'],
+      }),
     ];
 
-    render(<Results {...({ results, riskFindings } as any)} />);
+    render(<Results results={results} riskFindings={riskFindings} />);
 
-    expect(screen.getByText('后端关联高危发现')).toBeInTheDocument();
-    expect(screen.getByText('High')).toBeInTheDocument();
-    expect(screen.getByText(/优先隔离主机/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '疑似入侵' })).toBeInTheDocument();
+    expect(screen.getByText('发现 1 项严重风险、1 项高危风险，主机疑似已被入侵')).toBeInTheDocument();
+    expect(screen.queryAllByText('Critical').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('High').length).toBeGreaterThan(0);
+    expect(screen.getByText('持久化 (Persistence) · 1')).toBeInTheDocument();
+    expect(screen.getByText('命令与控制 (C2) · 1')).toBeInTheDocument();
+    expect(screen.getByText('导出研判报告')).toBeInTheDocument();
+    expect(screen.getByText('分类：webshell')).toBeInTheDocument();
+    expect(screen.getByText('T1505.003 Web Shell')).toBeInTheDocument();
+    expect(screen.getByText('立即隔离样本')).toBeInTheDocument();
+    expect(screen.getByText('检查访问日志')).toBeInTheDocument();
+    expect(screen.getByText('确认进程路径')).toBeInTheDocument();
+    expect(screen.getByText('阻断外联地址')).toBeInTheDocument();
   });
 
-  it('renders the refactored evidence dashboard and selected module focus', () => {
+  it('switches to the module detail tab and preserves module-specific findings', async () => {
     const results = [
       {
         module_name: 'system_info',
@@ -183,11 +151,7 @@ describe('Results', () => {
         details: {
           hostname: 'WIN-IR',
           os_name: 'Windows Server',
-          os_version: '2022',
-          kernel_version: '10.0.20348',
-          cpu_model: 'Intel Xeon',
           cpu_count: 8,
-          memory: { total: 17179869184, used: 8589934592 },
         },
       },
       {
@@ -209,13 +173,16 @@ describe('Results', () => {
 
     const { container } = render(<Results results={results} />);
 
-    expect(container.querySelector('.scan-results-soc-shell')).toBeInTheDocument();
-    expect(container.querySelector('.scan-results-detail-grid')).toBeInTheDocument();
-    expect(container.querySelector('.scan-detail-surface')).toBeInTheDocument();
-    expect(screen.getAllByText('处置').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('需优先复核').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('tab', { name: '模块详情' }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: '模块详情' })).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(container.querySelector('.scan-module-strip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('tab', { name: /security_events/ }));
+
     expect(screen.getByText('当前模块')).toBeInTheDocument();
-    expect(screen.getByText('1 个关键条目')).toBeInTheDocument();
+    expect(screen.getByText('关键明细')).toBeInTheDocument();
+    expect(screen.getByText('Failed logon')).toBeInTheDocument();
+    expect(screen.getAllByText(/203\.0\.113\.9/).length).toBeGreaterThan(0);
+    expect(screen.getByText('原始数据')).toBeInTheDocument();
   });
 
   it('labels scheduled task and persistence scan results', async () => {
@@ -235,6 +202,7 @@ describe('Results', () => {
     ];
 
     const { container } = render(<Results results={results} />);
+    await openModuleDetail(document.body, 'cron');
 
     expect(screen.getAllByText('计划任务').length).toBeGreaterThan(0);
     expect(screen.getAllByText('持久化检测').length).toBeGreaterThan(0);
@@ -256,6 +224,13 @@ describe('Results', () => {
               ports: '0.0.0.0:6379->6379/tcp',
               suspicious: true,
               suspicious_reason: 'Redis exposed',
+            },
+          ],
+          images: ['redis:latest'],
+          suspicious_containers: [
+            {
+              name: 'cache',
+              reason: 'Redis exposed',
             },
           ],
         },
@@ -310,6 +285,7 @@ describe('Results', () => {
     ];
 
     const { container } = render(<Results results={results} />);
+    await openModuleDetail(document.body, 'docker');
 
     expect(screen.getAllByText('Docker').length).toBeGreaterThan(0);
     expect(screen.getAllByText('面板检测').length).toBeGreaterThan(0);
@@ -383,6 +359,7 @@ describe('Results', () => {
     ];
 
     const { container } = render(<Results results={results} />);
+    await openModuleDetail(document.body, 'startup');
 
     await waitFor(() => {
       expect(screen.getByText('关键明细')).toBeInTheDocument();
@@ -468,8 +445,8 @@ describe('Results', () => {
     ];
 
     const { container } = render(<Results results={results} />);
+    await openModuleDetail(document.body, 'security_posture');
 
-    expect(container.querySelector('.scan-finding-table')).toBeInTheDocument();
     expect(screen.getAllByText('安全状态').length).toBeGreaterThan(0);
     expect(screen.getByText('Defender 实时防护关闭')).toBeInTheDocument();
     expect(screen.getAllByText('Windows 防火墙').length).toBeGreaterThan(0);
@@ -565,6 +542,7 @@ describe('Results', () => {
     ];
 
     const { container } = render(<Results results={results} />);
+    await openModuleDetail(document.body, 'system_info');
 
     await waitFor(() => {
       expect(screen.getByText('WIN-IR')).toBeInTheDocument();
@@ -589,5 +567,11 @@ describe('Results', () => {
     expect(screen.getByText('ncat.exe')).toBeInTheDocument();
     expect(screen.getByText('suspicious security tool')).toBeInTheDocument();
     expect(screen.getByText('Remote Desktop Services')).toBeInTheDocument();
+  });
+
+  it('keeps the empty state when no results are available', () => {
+    render(<Results results={[]} />);
+
+    expect(screen.getByText('暂无扫描结果，请先执行快速扫描')).toBeInTheDocument();
   });
 });

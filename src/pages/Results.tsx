@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Tag, Typography, message } from 'antd';
+import { Button, Empty, Segmented, Select, Tag, Tabs, Typography, message } from 'antd';
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -11,7 +11,14 @@ import {
 import type { AnalysisResult } from '../types/analysis';
 import type { RiskFinding } from '../types/analysis';
 import { getScanModuleLabel, getScanStatusMeta, scanModuleCatalog } from '../modules/scan/catalog';
-import { buildRiskFindings, mergeRiskFindings, type RiskSeverity } from '../modules/scan/riskEngine';
+import {
+  assessmentVerdictLabels,
+  buildMarkdownReport,
+  buildRiskFindings,
+  computeAssessment,
+  mergeRiskFindings,
+  type RiskSeverity,
+} from '../modules/scan/riskEngine';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -50,6 +57,14 @@ const riskSeverityMeta: Record<RiskSeverity, { label: string; tone: string; colo
   medium: { label: 'Medium', tone: 'medium', color: 'processing' },
   low: { label: 'Low', tone: 'low', color: 'default' },
 };
+
+const severityOptions: Array<{ label: string; value: RiskSeverity | 'all' }> = [
+  { label: '全部', value: 'all' },
+  { label: '严重', value: 'critical' },
+  { label: '高危', value: 'high' },
+  { label: '中危', value: 'medium' },
+  { label: '低危', value: 'low' },
+];
 
 function isRecord(value: unknown): value is DetailRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -137,6 +152,23 @@ function statusColor(status: string) {
 
 function statusText(status: string) {
   return getScanStatusMeta(status).label;
+}
+
+function getVerdictTone(verdict: string) {
+  switch (verdict) {
+    case 'compromised':
+      return 'critical';
+    case 'suspicious':
+      return 'high';
+    case 'attention':
+      return 'medium';
+    default:
+      return 'low';
+  }
+}
+
+function formatVerdictLabel(verdict: string) {
+  return assessmentVerdictLabels[verdict as keyof typeof assessmentVerdictLabels] || '未发现明显风险';
 }
 
 function buildFindingSections(result: AnalysisResult): FindingSection[] {
@@ -696,9 +728,8 @@ function buildFindingSections(result: AnalysisResult): FindingSection[] {
   return [];
 }
 
-function renderRiskFinding(finding: RiskFinding) {
+function renderRiskFindingCard(finding: RiskFinding) {
   const meta = riskSeverityMeta[finding.severity];
-  const firstAction = finding.recommendedActions[0];
 
   return (
     <article className={`scan-risk-card ${meta.tone}`} key={finding.id}>
@@ -707,14 +738,22 @@ function renderRiskFinding(finding: RiskFinding) {
           <Text className="scan-risk-card-kicker">置信度 {finding.confidence}%</Text>
           <Text strong className="scan-risk-card-title">{finding.title}</Text>
         </div>
-        <Tag color={meta.color}>{meta.label}</Tag>
+        <div className="scan-risk-card-badges">
+          <Tag color={meta.color}>{meta.label}</Tag>
+          <Tag className="scan-risk-attack-tag">{finding.attackTactic}</Tag>
+          <Tag className="scan-risk-tech-tag">{finding.attackTechnique}</Tag>
+        </div>
       </div>
       <Paragraph className="scan-risk-reason">判定：{finding.reason}</Paragraph>
+      <div className="scan-risk-meta">
+        <Tag className="scan-risk-category-tag">分类：{finding.category}</Tag>
+        <Tag className="scan-risk-confidence-tag">置信度：{finding.confidence}%</Tag>
+      </div>
       {finding.affected.length > 0 ? (
         <div className="scan-risk-field-row">
           <Text type="secondary">影响对象</Text>
           <div>
-            {finding.affected.slice(0, 4).map((item) => (
+            {finding.affected.map((item) => (
               <Tag key={`${finding.id}-affected-${item}`}>对象: {item}</Tag>
             ))}
           </div>
@@ -724,21 +763,33 @@ function renderRiskFinding(finding: RiskFinding) {
         <div className="scan-risk-field-row">
           <Text type="secondary">证据</Text>
           <div>
-            {finding.evidence.slice(0, 4).map((evidence, index) => (
+            {finding.evidence.map((evidence, index) => (
               <Tag key={`${finding.id}-evidence-${index}`}>
                 {evidence.moduleName} | {evidence.label}: {evidence.value}
+                {evidence.time ? ` (${evidence.time})` : ''}
               </Tag>
             ))}
           </div>
         </div>
       ) : null}
-      {firstAction ? <Text className="scan-risk-action">{firstAction}</Text> : null}
+      {finding.recommendedActions.length > 0 ? (
+        <div className="scan-risk-action-list">
+          <Text type="secondary">处置建议</Text>
+          <ul>
+            {finding.recommendedActions.map((action) => (
+              <li key={`${finding.id}-action-${action}`}>{action}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </article>
   );
 }
 
 export default function Results({ results = [], riskFindings: providedRiskFindings = [] }: ResultsProps) {
   const [selectedModule, setSelectedModule] = useState<string | null>(null);
+  const [severityFilter, setSeverityFilter] = useState<RiskSeverity | 'all'>('all');
+  const [tacticFilter, setTacticFilter] = useState<string>('all');
 
   useEffect(() => {
     if (results.length === 0) {
@@ -763,9 +814,28 @@ export default function Results({ results = [], riskFindings: providedRiskFindin
     () => mergeRiskFindings([providedRiskFindings, computedRiskFindings]),
     [computedRiskFindings, providedRiskFindings],
   );
-  const highRiskCount = riskFindings.filter((finding) =>
-    finding.severity === 'critical' || finding.severity === 'high'
-  ).length;
+  const assessment = useMemo(() => computeAssessment(riskFindings), [riskFindings]);
+  const tacticOptions = useMemo(
+    () => [
+      { label: '全部战术', value: 'all' },
+      ...assessment.tacticCoverage.map((item) => ({ label: `${item.tactic} (${item.count})`, value: item.tactic })),
+    ],
+    [assessment.tacticCoverage],
+  );
+  const filteredFindings = useMemo(
+    () =>
+      riskFindings.filter((finding) => (
+        (severityFilter === 'all' || finding.severity === severityFilter)
+        && (tacticFilter === 'all' || finding.attackTactic === tacticFilter)
+      )),
+    [riskFindings, severityFilter, tacticFilter],
+  );
+
+  useEffect(() => {
+    if (tacticFilter !== 'all' && !assessment.tacticCoverage.some((item) => item.tactic === tacticFilter)) {
+      setTacticFilter('all');
+    }
+  }, [assessment.tacticCoverage, tacticFilter]);
 
   const statusStats = useMemo(
     () =>
@@ -793,6 +863,19 @@ export default function Results({ results = [], riskFindings: providedRiskFindin
     anchor.click();
     URL.revokeObjectURL(url);
     message.success('导出成功');
+  };
+
+  const exportMarkdownReport = () => {
+    const reportDate = new Date().toISOString().slice(0, 10);
+    const markdown = buildMarkdownReport(riskFindings, assessment, reportDate);
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `lumina-report-${reportDate}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    message.success('研判报告已导出');
   };
 
   if (results.length === 0) {
@@ -824,13 +907,9 @@ export default function Results({ results = [], riskFindings: providedRiskFindin
     { key: 'critical', label: '危险', value: statusStats.critical, tone: 'critical', icon: <ExclamationCircleOutlined /> },
   ];
   const priorityCount = statusStats.warning + statusStats.critical;
-  const selectedModulePosition = selectedResult
-    ? results.findIndex((result) => result.module_name === selectedResult.module_name) + 1
-    : 0;
   const scopeGroups = Array.from(new Set(scanModuleCatalog.map((module) => module.group)));
   const scopeText = scopeGroups.join(' / ');
   const priorityLabel = priorityCount > 0 ? '需优先复核' : '暂无高优先级';
-
   return (
     <div className="scan-results-workspace">
       <div className="scan-results-commandbar" aria-label="结果统计">
@@ -859,135 +938,216 @@ export default function Results({ results = [], riskFindings: providedRiskFindin
         <Button icon={<ExportOutlined />} onClick={exportResults}>
           导出 JSON
         </Button>
+        <Button icon={<FileTextOutlined />} onClick={exportMarkdownReport}>
+          导出研判报告
+        </Button>
       </div>
+      <Tabs
+        className="scan-results-tabs"
+        defaultActiveKey="assessment"
+        items={[
+          {
+            key: 'assessment',
+            label: '综合研判',
+            children: (
+              <div className="scan-assessment-tab">
+                <section className={`scan-verdict-banner ${getVerdictTone(assessment.verdict)}`}>
+                  <div className="scan-verdict-banner-copy">
+                    <Text className="scan-eyebrow">研判结论</Text>
+                    <Title level={3}>{formatVerdictLabel(assessment.verdict)}</Title>
+                    <Paragraph>{assessment.headline}</Paragraph>
+                  </div>
+                  <Tag
+                    color={
+                      getVerdictTone(assessment.verdict) === 'critical'
+                        ? 'error'
+                        : getVerdictTone(assessment.verdict) === 'high'
+                          ? 'warning'
+                          : getVerdictTone(assessment.verdict) === 'medium'
+                            ? 'processing'
+                            : 'success'
+                    }
+                  >
+                    {formatVerdictLabel(assessment.verdict)}
+                  </Tag>
+                </section>
 
-      <section className={`scan-risk-panel ${highRiskCount > 0 ? 'attention' : 'steady'}`}>
-        <div className="scan-risk-panel-head">
-          <div>
-            <Text className="scan-eyebrow">高危发现</Text>
-            <Title level={4}>扫描风险归因</Title>
-          </div>
-          <div className="scan-risk-panel-stats">
-            <span>
-              <Text>高危</Text>
-              <strong>{highRiskCount}</strong>
-            </span>
-            <span>
-              <Text>全部发现</Text>
-              <strong>{riskFindings.length}</strong>
-            </span>
-          </div>
-        </div>
-
-        {riskFindings.length > 0 ? (
-          <div className="scan-risk-grid">
-            {riskFindings.slice(0, 6).map(renderRiskFinding)}
-          </div>
-        ) : (
-          <div className="scan-risk-empty">
-            暂无自动归因的高危发现，建议继续复核模块详情和原始证据。
-          </div>
-        )}
-      </section>
-
-      <div className="scan-results-soc-shell scan-results-detail-grid">
-        <div className="scan-module-strip" role="tablist" aria-label="扫描模块">
-          {results.map((item, index) => {
-            const meta = getScanStatusMeta(item.status);
-            return (
-              <button
-                key={item.module_name}
-                aria-selected={selectedModule === item.module_name}
-                className={`scan-result-nav-item ${meta.tone} ${selectedModule === item.module_name ? 'active' : ''}`}
-                onClick={() => setSelectedModule(item.module_name)}
-                role="tab"
-                type="button"
-              >
-                <span className="scan-result-nav-index">{String(index + 1).padStart(2, '0')}</span>
-                <span className="scan-result-nav-main">
-                  <strong>{getScanModuleLabel(item.module_name)}</strong>
-                  <code>{item.module_name}</code>
-                </span>
-                <Tag color={meta.color}>{meta.label}</Tag>
-              </button>
-            );
-          })}
-        </div>
-
-        <main className="scan-result-detail scan-result-detail-panel">
-          {selectedResult ? (
-            <div className="scan-detail-surface">
-              <div className="scan-detail-header">
-                <div>
-                  <Text className="scan-panel-kicker">当前模块</Text>
-                  <Title level={4}>{getScanModuleLabel(selectedResult.module_name)}</Title>
-                  <Text type="secondary">{selectedResult.module_name}</Text>
-                </div>
-                <div className="scan-detail-status-stack">
-                  <Tag color={statusColor(selectedResult.status)}>{statusText(selectedResult.status)}</Tag>
-                  <Text type="secondary">{selectedFindingCount} 个关键条目</Text>
-                </div>
-              </div>
-
-              <section className="scan-summary-panel">
-                <Text className="scan-section-title">摘要</Text>
-                <Paragraph>{selectedResult.summary}</Paragraph>
-              </section>
-
-              {selectedFindingSections.length > 0 ? (
-                <section className="scan-findings-panel">
-                  <Text className="scan-section-title">关键明细</Text>
-                  {selectedFindingSections.map((section) => (
-                    <div className="scan-finding-section" key={section.title}>
-                      <Text strong>{section.title}</Text>
-                      <div className="scan-finding-table">
-                        {section.rows.map((row) => (
-                          <article className={`scan-finding-record ${row.risk ? 'risk' : ''}`} key={row.key}>
-                            <div className="scan-finding-row-head">
-                              <div>
-                                <Text strong>{row.title}</Text>
-                                {row.subtitle ? <Text type="secondary">{row.subtitle}</Text> : null}
-                              </div>
-                              {row.risk ? <Tag color="warning">可疑</Tag> : null}
-                            </div>
-                            <div className="scan-finding-fields">
-                              {row.risk && row.reason && row.reason !== '-' ? (
-                                <Tag className="scan-finding-reason-tag">{row.reason}</Tag>
-                              ) : null}
-                              {row.fields.map((field) => (
-                                <Tag key={`${row.key}-${field.label}`}>
-                                  {field.label}: {field.value}
-                                </Tag>
-                              ))}
-                            </div>
-                          </article>
-                        ))}
-                      </div>
+                <section className="scan-assessment-panel">
+                  <Text className="scan-section-title">严重级态势</Text>
+                  <div className="scan-stat-grid">
+                    <div className="scan-stat-tile critical">
+                      <Text>Critical</Text>
+                      <strong>{assessment.severityCounts.critical}</strong>
                     </div>
-                  ))}
+                    <div className="scan-stat-tile warning">
+                      <Text>High</Text>
+                      <strong>{assessment.severityCounts.high}</strong>
+                    </div>
+                    <div className="scan-stat-tile info">
+                      <Text>Medium</Text>
+                      <strong>{assessment.severityCounts.medium}</strong>
+                    </div>
+                    <div className="scan-stat-tile ok">
+                      <Text>Low</Text>
+                      <strong>{assessment.severityCounts.low}</strong>
+                    </div>
+                  </div>
                 </section>
-              ) : (
-                <section className="scan-findings-panel">
-                  <Text className="scan-section-title">关键明细</Text>
-                  <div className="scan-finding-empty">当前模块没有结构化关键条目。</div>
-                </section>
-              )}
 
-              <details className="scan-raw-data">
-                <summary>
-                  <span>原始数据</span>
-                  <Tag color={statusColor(selectedResult.status)}>{statusText(selectedResult.status)}</Tag>
-                </summary>
-                <pre>{JSON.stringify(selectedResult.details, null, 2)}</pre>
-              </details>
-            </div>
-          ) : (
-            <div className="scan-empty-panel">
-              <Empty description="请选择一个模块查看详情" />
-            </div>
-          )}
-        </main>
-      </div>
+                <section className="scan-assessment-panel">
+                  <Text className="scan-section-title">ATT&CK 战术覆盖</Text>
+                  <div className="scan-attack-coverage">
+                    {assessment.tacticCoverage.length > 0 ? assessment.tacticCoverage.map((item) => (
+                      <Tag key={item.tactic} className="scan-attack-coverage-chip">
+                        {item.tactic} · {item.count}
+                      </Tag>
+                    )) : <div className="scan-finding-empty">暂无战术归因。</div>}
+                  </div>
+                </section>
+
+                <section className="scan-assessment-panel">
+                  <div className="scan-risk-panel-head">
+                    <div>
+                      <Text className="scan-section-title">全部发现</Text>
+                      <Paragraph className="scan-assessment-caption">
+                        研判优先列表按风险汇总，保留证据、ATT&CK 归因和完整处置建议。
+                      </Paragraph>
+                    </div>
+                    <div className="scan-assessment-filters">
+                      <Segmented
+                        options={severityOptions}
+                        value={severityFilter}
+                        onChange={(value) => setSeverityFilter(value as RiskSeverity | 'all')}
+                      />
+                      <Select
+                        className="scan-attack-select"
+                        options={tacticOptions}
+                        value={tacticFilter}
+                        onChange={(value) => setTacticFilter(value)}
+                        style={{ minWidth: 220 }}
+                      />
+                    </div>
+                  </div>
+
+                  {filteredFindings.length > 0 ? (
+                    <div className="scan-risk-grid scan-risk-grid-expanded">
+                      {filteredFindings.map(renderRiskFindingCard)}
+                    </div>
+                  ) : (
+                    <div className="scan-risk-empty">
+                      当前筛选条件下没有发现，尝试切换严重级别或 ATT&CK 战术。
+                    </div>
+                  )}
+                </section>
+              </div>
+            ),
+          },
+          {
+            key: 'module-detail',
+            label: '模块详情',
+            children: (
+              <div className="scan-results-soc-shell scan-results-detail-grid">
+                <div className="scan-module-strip" role="tablist" aria-label="扫描模块">
+                  {results.map((item, index) => {
+                    const meta = getScanStatusMeta(item.status);
+                    return (
+                      <button
+                        key={item.module_name}
+                        aria-selected={selectedModule === item.module_name}
+                        className={`scan-result-nav-item ${meta.tone} ${selectedModule === item.module_name ? 'active' : ''}`}
+                        onClick={() => setSelectedModule(item.module_name)}
+                        role="tab"
+                        type="button"
+                      >
+                        <span className="scan-result-nav-index">{String(index + 1).padStart(2, '0')}</span>
+                        <span className="scan-result-nav-main">
+                          <strong>{getScanModuleLabel(item.module_name)}</strong>
+                          <code>{item.module_name}</code>
+                        </span>
+                        <Tag color={meta.color}>{meta.label}</Tag>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <main className="scan-result-detail scan-result-detail-panel">
+                  {selectedResult ? (
+                    <div className="scan-detail-surface">
+                      <div className="scan-detail-header">
+                        <div>
+                          <Text className="scan-panel-kicker">当前模块</Text>
+                          <Title level={4}>{getScanModuleLabel(selectedResult.module_name)}</Title>
+                          <Text type="secondary">{selectedResult.module_name}</Text>
+                        </div>
+                        <div className="scan-detail-status-stack">
+                          <Tag color={statusColor(selectedResult.status)}>{statusText(selectedResult.status)}</Tag>
+                          <Text type="secondary">{selectedFindingCount} 个关键条目</Text>
+                        </div>
+                      </div>
+
+                      <section className="scan-summary-panel">
+                        <Text className="scan-section-title">摘要</Text>
+                        <Paragraph>{selectedResult.summary}</Paragraph>
+                      </section>
+
+                      {selectedFindingSections.length > 0 ? (
+                        <section className="scan-findings-panel">
+                          <Text className="scan-section-title">关键明细</Text>
+                          {selectedFindingSections.map((section) => (
+                            <div className="scan-finding-section" key={section.title}>
+                              <Text strong>{section.title}</Text>
+                              <div className="scan-finding-table">
+                                {section.rows.map((row) => (
+                                  <article className={`scan-finding-record ${row.risk ? 'risk' : ''}`} key={row.key}>
+                                    <div className="scan-finding-row-head">
+                                      <div>
+                                        <Text strong>{row.title}</Text>
+                                        {row.subtitle ? <Text type="secondary">{row.subtitle}</Text> : null}
+                                      </div>
+                                      {row.risk ? <Tag color="warning">可疑</Tag> : null}
+                                    </div>
+                                    <div className="scan-finding-fields">
+                                      {row.risk && row.reason && row.reason !== '-' ? (
+                                        <Tag className="scan-finding-reason-tag">{row.reason}</Tag>
+                                      ) : null}
+                                      {row.fields.map((field) => (
+                                        <Tag key={`${row.key}-${field.label}`}>
+                                          {field.label}: {field.value}
+                                        </Tag>
+                                      ))}
+                                    </div>
+                                  </article>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </section>
+                      ) : (
+                        <section className="scan-findings-panel">
+                          <Text className="scan-section-title">关键明细</Text>
+                          <div className="scan-finding-empty">当前模块没有结构化关键条目。</div>
+                        </section>
+                      )}
+
+                      <details className="scan-raw-data">
+                        <summary>
+                          <span>原始数据</span>
+                          <Tag color={statusColor(selectedResult.status)}>{statusText(selectedResult.status)}</Tag>
+                        </summary>
+                        <pre>{JSON.stringify(selectedResult.details, null, 2)}</pre>
+                      </details>
+                    </div>
+                  ) : (
+                    <div className="scan-empty-panel">
+                      <Empty description="请选择一个模块查看详情" />
+                    </div>
+                  )}
+                </main>
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

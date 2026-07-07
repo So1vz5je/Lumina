@@ -1,7 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
-import type { AnalysisResult } from '../../types/analysis';
-import { buildRiskFindings } from './riskEngine';
+import type { AnalysisResult, RiskFinding } from '../../types/analysis';
+import { buildMarkdownReport, buildRiskFindings, computeAssessment } from './riskEngine';
+
+function makeFinding(overrides: Partial<RiskFinding>): RiskFinding {
+  return {
+    id: 'finding-1',
+    severity: 'low',
+    category: 'test',
+    attackTactic: '测试战术',
+    attackTechnique: 'T0000 测试技术',
+    title: '测试发现',
+    reason: '测试原因',
+    confidence: 50,
+    affected: [],
+    evidence: [],
+    recommendedActions: [],
+    ...overrides,
+  };
+}
 
 describe('buildRiskFindings', () => {
   it('does not mark a detected panel as high risk by itself', () => {
@@ -32,6 +49,9 @@ describe('buildRiskFindings', () => {
         expect.objectContaining({
           severity: 'medium',
           title: expect.stringContaining('Web 面板'),
+          category: 'panel-context',
+          attackTactic: '初始访问面 (上下文)',
+          attackTechnique: 'T1190 利用面向公众的应用',
         }),
       ]),
     );
@@ -86,6 +106,9 @@ describe('buildRiskFindings', () => {
         severity: 'critical',
         title: expect.stringContaining('WebShell'),
         confidence: expect.any(Number),
+        category: 'webshell',
+        attackTactic: '持久化 (Persistence)',
+        attackTechnique: 'T1505.003 Web Shell',
       }),
     );
     expect(findings[0].affected).toContain('D:\\ctf-tools\\phpstudy_pro\\WWW\\upload\\shell.php');
@@ -147,8 +170,113 @@ describe('buildRiskFindings', () => {
           severity: 'high',
           title: expect.stringContaining('可疑进程外联'),
           affected: expect.arrayContaining(['ncat.exe', '198.51.100.22:4444']),
+          category: 'process-network',
+          attackTactic: '命令与控制 (C2)',
+          attackTechnique: 'T1071 应用层协议',
         }),
       ]),
     );
+  });
+});
+
+describe('computeAssessment', () => {
+  it('returns compromised when a critical finding exists and groups tactic coverage', () => {
+    const assessment = computeAssessment([
+      makeFinding({ severity: 'critical', attackTactic: '持久化 (Persistence)' }),
+      makeFinding({ severity: 'high', attackTactic: '命令与控制 (C2)' }),
+      makeFinding({ severity: 'medium', attackTactic: '持久化 (Persistence)' }),
+      makeFinding({ severity: 'low', attackTactic: '命令与控制 (C2)' }),
+    ]);
+
+    expect(assessment.verdict).toBe('compromised');
+    expect(assessment.severityCounts).toEqual({
+      critical: 1,
+      high: 1,
+      medium: 1,
+      low: 1,
+    });
+    expect(assessment.tacticCoverage).toEqual(
+      expect.arrayContaining([
+        { tactic: '命令与控制 (C2)', count: 2 },
+        { tactic: '持久化 (Persistence)', count: 2 },
+      ]),
+    );
+    expect(assessment.tacticCoverage.every((item) => item.count === 2)).toBe(true);
+    expect(assessment.headline).toContain('严重风险');
+  });
+
+  it('returns suspicious when only high findings exist', () => {
+    const assessment = computeAssessment([
+      makeFinding({ severity: 'high' }),
+      makeFinding({ severity: 'high', attackTactic: '防御规避 (Defense Evasion)' }),
+    ]);
+
+    expect(assessment.verdict).toBe('suspicious');
+    expect(assessment.severityCounts.high).toBe(2);
+    expect(assessment.headline).toContain('高危风险');
+  });
+
+  it('returns attention when only medium findings exist', () => {
+    const assessment = computeAssessment([
+      makeFinding({ severity: 'medium' }),
+      makeFinding({ severity: 'medium', attackTactic: '命令与控制 (C2)' }),
+    ]);
+
+    expect(assessment.verdict).toBe('attention');
+    expect(assessment.severityCounts.medium).toBe(2);
+    expect(assessment.headline).toContain('中风险');
+  });
+
+  it('returns clean when no meaningful findings exist', () => {
+    const assessment = computeAssessment([]);
+
+    expect(assessment.verdict).toBe('clean');
+    expect(assessment.severityCounts).toEqual({
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+    });
+    expect(assessment.headline).toBe('未发现明显风险项');
+    expect(assessment.tacticCoverage).toEqual([]);
+  });
+});
+
+describe('buildMarkdownReport', () => {
+  it('produces a markdown summary with verdict, tactics, and findings', () => {
+    const findings = [
+      makeFinding({
+        id: 'webshell-1',
+        severity: 'critical',
+        category: 'webshell',
+        attackTactic: '持久化 (Persistence)',
+        attackTechnique: 'T1505.003 Web Shell',
+        title: '疑似 WebShell 文件',
+        reason: '命中脚本特征',
+        confidence: 92,
+        affected: ['D:\\www\\shell.php'],
+        evidence: [
+          {
+            moduleName: 'file_scan',
+            label: 'shell.php',
+            value: 'D:\\www\\shell.php',
+            time: '2026-06-26 14:12:03',
+          },
+        ],
+        recommendedActions: ['立即隔离样本'],
+      }),
+    ];
+    const assessment = computeAssessment(findings);
+
+    const report = buildMarkdownReport(findings, assessment, '2026-06-27');
+
+    expect(report).toContain('# Lumina 研判报告');
+    expect(report).toContain('研判结论：疑似入侵');
+    expect(report).toContain('结论摘要：');
+    expect(report).toContain('## ATT&CK 战术覆盖');
+    expect(report).toContain('### 1. 疑似 WebShell 文件');
+    expect(report).toContain('ATT&CK 技术：T1505.003 Web Shell');
+    expect(report).toContain('处置建议');
+    expect(report).toContain('立即隔离样本');
   });
 });

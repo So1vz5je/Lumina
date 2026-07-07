@@ -52,6 +52,9 @@ export function normalizeRiskFindings(value: unknown): RiskFinding[] {
   return value.filter(isRecord).map((item, index) => ({
     id: asString(item.id, `backend-risk-${index}`),
     severity: normalizeRiskSeverity(item.severity),
+    category: asString(item.category, 'unknown'),
+    attackTactic: asString(item.attackTactic ?? item.attack_tactic, '未分类战术'),
+    attackTechnique: asString(item.attackTechnique ?? item.attack_technique, '未分类技术'),
     title: asString(item.title, '未命名风险'),
     reason: asString(item.reason),
     confidence: Math.max(0, Math.min(100, asNumber(item.confidence, 50))),

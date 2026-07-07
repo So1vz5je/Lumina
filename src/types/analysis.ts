@@ -17,12 +17,36 @@ export interface RiskEvidence {
 export interface RiskFinding {
   id: string;
   severity: RiskSeverity;
+  category: string;
+  attackTactic: string;
+  attackTechnique: string;
   title: string;
   reason: string;
   confidence: number;
   affected: string[];
   evidence: RiskEvidence[];
   recommendedActions: string[];
+}
+
+export type ScanAssessmentVerdict = 'compromised' | 'suspicious' | 'attention' | 'clean';
+
+export interface ScanAssessmentSeverityCounts {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface ScanAssessmentTacticCoverage {
+  tactic: string;
+  count: number;
+}
+
+export interface ScanAssessment {
+  verdict: ScanAssessmentVerdict;
+  severityCounts: ScanAssessmentSeverityCounts;
+  tacticCoverage: ScanAssessmentTacticCoverage[];
+  headline: string;
 }
 
 export interface ScanRunPayload {
